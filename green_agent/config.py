@@ -33,6 +33,10 @@ class LoopConfig:
     max_iterations: int = 12
     max_total_tokens: int = 150_000
     stagnation_threshold: int = 2
+    # Consecutive read-only turns before the prompt insists on an edit.
+    max_read_streak: int = 2
+    # Blocked identical calls tolerated before the run is called stagnant.
+    max_blocked_repeats: int = 3
 
 
 @dataclass(frozen=True)

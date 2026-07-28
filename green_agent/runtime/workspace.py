@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -106,6 +107,14 @@ class Workspace:
         """Unified diff against the baseline, including untracked files."""
         self._git(self.root, "add", "-A", "-N")
         return self._git(self.root, "diff", since or self.baseline or "HEAD")
+
+    def state_token(self) -> str:
+        """Short hash of the current working tree, for repeat detection.
+
+        Lets the policy layer ask "has anything changed since that call?"
+        without knowing anything about tools or git.
+        """
+        return hashlib.sha1(self.diff().encode("utf-8")).hexdigest()[:12]
 
     def changed_files(self, since: str | None = None) -> list[str]:
         self._git(self.root, "add", "-A", "-N")

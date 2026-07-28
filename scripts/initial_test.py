@@ -14,8 +14,10 @@ and register it in SUITES at the bottom.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
+import pathlib
 import sys
 import tempfile
 from pathlib import Path
@@ -31,8 +33,13 @@ from green_agent.context.budget import estimate_tokens, fit, signature_only
 from green_agent.context.slicer import SymbolIndex, slices_for_failure
 from green_agent.context.traceback_parse import parse_failures
 from green_agent.runtime import pytest_runner
+from green_agent.config import Config, GuardConfig as _GC, LoopConfig
+from green_agent.llm import ReplayLLM
+from green_agent.loop import Agent
 from green_agent.runtime.workspace import PathEscape, Workspace
-from green_agent.types import Frame
+from green_agent.tools.apply_patch import changed_line_count, changed_paths
+from green_agent.tools.registry import ToolContext, dispatch, schemas
+from green_agent.types import Frame, ToolCall
 
 DEMO = Path(__file__).resolve().parents[1] / "demo_repo"
 
@@ -476,6 +483,326 @@ def suite_budget() -> None:
               signature_only(slices[0]).start_line == slices[0].start_line)
 
 
+NODE = "tests/test_cart.py::test_discount_can_lose_free_shipping"
+
+
+def _diff(path: str, transform) -> str:
+    """Build a unified diff against the real file.
+
+    Hard-coding diff context makes a check depend on the exact bytes of
+    demo_repo, and a patch that silently fails to apply turns every downstream
+    check into a vacuous pass. Generating it means the scenario always happens.
+    """
+    old = (DEMO / path).read_text()
+    new = transform(old)
+    assert new != old, f"transform did not change {path}"
+    return "".join(difflib.unified_diff(
+        old.splitlines(True), new.splitlines(True),
+        fromfile=f"a/{path}", tofile=f"b/{path}", n=3))
+
+
+REAL_FIX = _diff("cart.py", lambda t: t.replace(
+    "if self.subtotal() >= FREE_SHIPPING_THRESHOLD:",
+    "if self.apply_discount(discount_percent) >= FREE_SHIPPING_THRESHOLD:"))
+
+CHEAT = _diff("tests/test_cart.py", lambda t: t.replace("== 61.16", "== 56.16"))
+
+BREAKS_SYNTAX = _diff("cart.py", lambda t: "def oops(:\n" + t)
+
+# Valid patches that change something harmless, so the workspace state moves
+# but the failure does not. Used to exercise fingerprint-based stagnation.
+# Anchored on position, not content: any string I pick may not exist in the
+# file, and a transform that silently matches nothing breaks the scenario.
+# Distant regions so their diff contexts cannot overlap.
+NOOP_A = _diff("cart.py", lambda t: t.rstrip("\n") + "\n# noop A\n")
+NOOP_B = _diff("cart.py", lambda t: "# noop B\n" + t)
+
+
+def _ctx(ws) -> ToolContext:
+    cfg = Config()
+    return ToolContext(workspace=ws, config=cfg, target_test=NODE)
+
+
+def _call(ctx, name, **arguments):
+    return dispatch(ToolCall(name, arguments, f"call_{name}"), ctx)
+
+
+def suite_tools() -> None:
+    names = [s["name"] for s in schemas()]
+    check("exactly four tools exposed", names == ["read_file", "apply_patch", "run_tests", "finish"],
+          str(names))
+    check("every schema declares parameters", all("parameters" in s for s in schemas()))
+
+    with Workspace(DEMO, test_globs=Config().guards.test_path_globs) as ws:
+        ctx = _ctx(ws)
+
+        # --- dispatch robustness -----------------------------------------
+        bad = _call(ctx, "delete_everything")
+        check("unknown tool refused", bad.ok is False and "No tool named" in bad.content)
+        check("refusal lists real tools", "apply_patch" in bad.content)
+        check("call_id echoed back", bad.call_id == "call_delete_everything")
+
+        extra = _call(ctx, "run_tests", node_id=NODE, nonsense=1)
+        check("unexpected argument ignored, not fatal", extra.ok is True)
+        check("ignored argument recorded", extra.meta.get("ignored_arguments") == ["nonsense"])
+
+        # --- read_file ----------------------------------------------------
+        # Locate the target line instead of hard-coding it: the check must
+        # test read_file, not the exact formatting of demo_repo/cart.py.
+        source_lines = ws.resolve("cart.py").read_text().splitlines()
+        defn = next(i + 1 for i, line in enumerate(source_lines)
+                    if line.strip().startswith("def shipping_fee"))
+        read = _call(ctx, "read_file", path="cart.py", start_line=defn, end_line=defn + 5)
+        check("read_file returns the range", read.ok and "def shipping_fee" in read.content,
+              read.content[:120])
+        check("read_file numbers lines absolutely", f"{defn:>5} |" in read.content,
+              read.content[:60])
+        check("read_file refuses escapes", _call(ctx, "read_file", path="../../etc/passwd").ok is False)
+        check("read_file reports missing files",
+              "No such file" in _call(ctx, "read_file", path="nope.py").content)
+        check("inverted range refused",
+              _call(ctx, "read_file", path="cart.py", start_line=30, end_line=5).ok is False)
+
+        # --- guards -------------------------------------------------------
+        cheat = _call(ctx, "apply_patch", diff=CHEAT)
+        check("editing a test file is refused", cheat.ok is False)
+        check("refusal explains what to do instead", "Fix the source" in cheat.content)
+        check("test file is untouched on disk",
+              "61.16" in ws.resolve("tests/test_cart.py").read_text())
+
+        escape = _call(ctx, "apply_patch", diff=REAL_FIX.replace("a/cart.py", "a/../../evil.py")
+                                                        .replace("b/cart.py", "b/../../evil.py"))
+        check("patch outside the workspace refused", escape.ok is False)
+
+        huge = "--- a/cart.py\n+++ b/cart.py\n@@ -1,1 +1,1 @@\n" + "+x\n" * 200
+        check("oversized patch refused", _call(ctx, "apply_patch", diff=huge).ok is False)
+
+        check("empty diff refused", _call(ctx, "apply_patch", diff="   ").ok is False)
+        junk = _call(ctx, "apply_patch", diff="please change the shipping logic")
+        check("prose instead of a diff refused", junk.ok is False)
+        check("refusal explains the required format", "unified diff" in junk.content)
+
+        stale = _call(ctx, "apply_patch", diff=REAL_FIX.replace(
+            "if self.subtotal() >= FREE_SHIPPING_THRESHOLD:", "if self.nonexistent_line():"))
+        check("diff with wrong context refused", stale.ok is False)
+        check("rejection tells the model to re-read", "Re-read the file" in stale.content)
+        check("nothing changed after a rejected patch", ws.diff().strip() == "")
+
+        # --- the happy path -----------------------------------------------
+        before = _call(ctx, "run_tests")
+        check("run_tests reports the failure", before.meta["passed"] is False)
+        check("failing test is still a successful call", before.ok is True)
+        check("summary names the exception", "AssertionError" in before.content)
+        check("fingerprints exposed for the policy layer", len(before.meta["fingerprints"]) == 1)
+        check("omitted node_id means the target test", before.meta["node_id"] == NODE)
+
+        applied = _call(ctx, "apply_patch", diff=REAL_FIX)
+        check("valid patch applies", applied.ok is True, applied.content)
+        check("patch recorded which files changed", applied.meta["paths"] == ["cart.py"])
+        check("diff reflects the edit", "apply_discount(discount_percent)" in ws.diff())
+
+        after = _call(ctx, "run_tests")
+        check("target test now passes", after.meta["passed"] is True)
+        check("no regressions in the suite",
+              pytest_runner.run(ws.root, None, timeout_s=60).passed is True)
+
+        fenced = _call(ctx, "apply_patch", diff="```diff\n" + REAL_FIX + "```")
+        check("markdown-fenced diff is handled", "did not apply" in fenced.content
+              or fenced.ok is True)
+
+        done = _call(ctx, "finish", summary="shipping_fee ignored the discount")
+        check("finish records the claim", ctx.finish_summary.startswith("shipping_fee"))
+        check("finish does not end the run by itself", "verify" in done.content)
+
+    check("diff helper counts changed lines", changed_line_count(REAL_FIX) == 2)
+    check("diff helper extracts paths", changed_paths(REAL_FIX) == ["cart.py"])
+
+
+def _turn(text, name=None, arguments=None, prompt=900, completion=120):
+    message = {"role": "assistant", "content": text}
+    if name:
+        message["tool_calls"] = [
+            {"id": "c", "function": {"name": name, "arguments": json.dumps(arguments or {})}}
+        ]
+    return {
+        "choices": [{"message": message}],
+        "usage": {"prompt_tokens": prompt, "completion_tokens": completion},
+    }
+
+
+_last_replay: ReplayLLM | None = None
+
+
+def _run(script, cfg=None, target=NODE, repo=None):
+    global _last_replay
+    with tempfile.TemporaryDirectory() as trace_dir:
+        cfg = cfg or Config()
+        cfg = Config(model=cfg.model, context=cfg.context, loop=cfg.loop,
+                     guards=cfg.guards, trace_dir=trace_dir)
+        _last_replay = ReplayLLM(script)
+        report = Agent(cfg, _last_replay).run(repo or DEMO, target, task_id="check")
+        # A scenario that runs out of scripted turns reports a transport error,
+        # which reads as a policy failure but is a fixture failure. Name it.
+        if report.outcome.value == "error" and report.iterations > 0 and not _last_replay._queue:
+            check("scenario script outlasts the iteration cap", False,
+                  f"replay exhausted after {report.iterations} turns; "
+                  f"script had {len(script)}")
+        traces = sorted(pathlib.Path(trace_dir).glob("*.jsonl"))
+        events = [json.loads(line) for line in traces[0].read_text().splitlines()] if traces else []
+        return report, events
+
+
+def suite_loop() -> None:
+    from green_agent.types import Outcome
+
+    # --- happy path ------------------------------------------------------
+    report, events = _run([
+        _turn("HYPOTHESIS: shipping_fee ignores the discount", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: verify", "run_tests", {}),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "threshold checked pre-discount"}),
+    ])
+    check("run reports FIXED", report.outcome is Outcome.FIXED, report.outcome.value)
+    check("three iterations used", report.iterations == 3, str(report.iterations))
+    check("tokens accumulated", report.total_tokens == 3060, str(report.total_tokens))
+    check("diff contains the real fix", "apply_discount(discount_percent)" in report.final_diff)
+    check("diff touches only source", "tests/" not in report.final_diff)
+    check("hypotheses captured per step", all(s.hypothesis for s in report.steps))
+
+    kinds = [e["event"] for e in events]
+    check("trace opens and closes", kinds[0] == "run_start" and kinds[-1] == "run_end")
+    check("baseline recorded before any edit", "baseline" in kinds)
+    check("context slices traced", any(e["event"] == "context_built" for e in events))
+    check("verification traced", any(e["event"] == "verify" for e in events))
+    check("trace is replayable",
+          len(ReplayLLM([e["response"] for e in events if e["event"] == "model_call"])._queue) == 3)
+
+    # --- the model claims success without fixing anything -----------------
+    report, _ = _run([
+        _turn("HYPOTHESIS: probably fine", "finish", {"summary": "looks correct to me"}),
+        _turn("HYPOTHESIS: still not fixed", "run_tests", {}),
+        _turn("HYPOTHESIS: giving up", "finish", {"summary": "again"}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=3)))
+    check("unverified finish is refused",
+          report.outcome is Outcome.BUDGET_EXHAUSTED, report.outcome.value)
+    check("finish claims were rejected, not accepted",
+          all(s.result.ok for s in report.steps if s.call.name == "finish"))
+    check("no changes were made", report.final_diff.strip() == "")
+
+    # --- the model tries to edit the test --------------------------------
+    report, _ = _run([
+        _turn("HYPOTHESIS: the test expects the wrong number", "apply_patch", {"diff": CHEAT}),
+        _turn("HYPOTHESIS: try again", "apply_patch", {"diff": CHEAT}),
+        _turn("HYPOTHESIS: verify", "run_tests", {}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=3)))
+    check("cheating never reaches FIXED", report.outcome is not Outcome.FIXED)
+    check("test file never modified", "test_cart.py" not in report.final_diff, report.final_diff[:80])
+    check("rejections recorded as failed steps",
+          all(s.result.ok is False for s in report.steps if s.call.name == "apply_patch"))
+
+    # --- patching without progress: same failure fingerprint --------------
+    # The script must outlast max_iterations: if replay runs dry the loop
+    # reports a transport error, which looks like a policy failure but is a
+    # fixture failure. Either no-progress detector may fire first, and both
+    # must end the run the same way.
+    report, events = _run([
+        _turn("HYPOTHESIS: check first", "run_tests", {}),
+        _turn("HYPOTHESIS: tweak one", "apply_patch", {"diff": NOOP_A}),
+        _turn("HYPOTHESIS: check", "run_tests", {}),
+        _turn("HYPOTHESIS: tweak two", "apply_patch", {"diff": NOOP_B}),
+        _turn("HYPOTHESIS: check again", "run_tests", {}),
+    ] + [_turn("HYPOTHESIS: once more", "run_tests", {}) for _ in range(8)],
+        cfg=Config(loop=LoopConfig(max_iterations=8, stagnation_threshold=1)))
+    check("stagnation stops the run", report.outcome is Outcome.STAGNATED, report.outcome.value)
+    check("stagnation stops early", report.iterations < 8, str(report.iterations))
+    check("stagnation traced", any(e["event"] == "stagnation" for e in events))
+    check("re-plan was offered before aborting",
+          any(e["event"] == "stagnation" for e in events) and report.iterations >= 4,
+          str(report.iterations))
+
+    # --- a patch that breaks the file ------------------------------------
+    report, events = _run([
+        _turn("HYPOTHESIS: rewrite the module", "apply_patch", {"diff": BREAKS_SYNTAX}),
+        _turn("HYPOTHESIS: check it", "run_tests", {}),
+        _turn("HYPOTHESIS: now fix properly", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: verify", "run_tests", {}),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "fixed"}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=6)))
+    check("syntax-breaking patch actually applied", report.steps[0].result.ok is True,
+          report.steps[0].result.content[:120])
+    check("collection error detected",
+          any(e.get("meta", {}).get("collect_error") for e in events))
+    check("collection error is recovered", any(e["event"] == "recovered" for e in events))
+    check("agent still finishes after recovery", report.outcome is Outcome.FIXED,
+          report.outcome.value)
+    check("broken code did not survive", "def oops" not in report.final_diff)
+
+    # --- reading forever without editing (the first live-run failure) ----
+    report, events = _run(
+        [_turn("HYPOTHESIS: let me look again", "read_file", {"path": "cart.py"})
+         for _ in range(6)],
+        cfg=Config(loop=LoopConfig(max_iterations=6)),
+    )
+    blocked = [e for e in events if e["event"] == "repeat_blocked"]
+    check("identical read_file is blocked", len(blocked) >= 3, str(len(blocked)))
+    check("a read loop ends the run", report.outcome is Outcome.STAGNATED, report.outcome.value)
+    check("first read still went through", report.steps[0].result.ok is True)
+    check("repeat is rejected, not dispatched", report.steps[1].result.ok is False)
+    check("rejection tells the model to move on",
+          "different action" in report.steps[1].result.content)
+    check("read-only streak is flagged", any(e["event"] == "read_streak" for e in events))
+
+    varied = _run(
+        [_turn("HYPOTHESIS: read one", "read_file", {"path": "cart.py", "start_line": 1}),
+         _turn("HYPOTHESIS: read two", "read_file", {"path": "cart.py", "start_line": 20}),
+         _turn("HYPOTHESIS: now patch", "apply_patch", {"diff": REAL_FIX}),
+         _turn("HYPOTHESIS: verify", "run_tests", {}),
+         _turn("HYPOTHESIS: done", "finish", {"summary": "fixed"})],
+        cfg=Config(loop=LoopConfig(max_iterations=6)),
+    )[0]
+    check("different ranges are not treated as repeats", varied.outcome.value == "fixed",
+          varied.outcome.value)
+
+    repeated_runs = _run(
+        [_turn("HYPOTHESIS: patch", "apply_patch", {"diff": REAL_FIX}),
+         _turn("HYPOTHESIS: check", "run_tests", {}),
+         _turn("HYPOTHESIS: check again", "run_tests", {}),
+         _turn("HYPOTHESIS: done", "finish", {"summary": "fixed"})],
+        cfg=Config(loop=LoopConfig(max_iterations=5)),
+    )[0]
+    check("re-running tests after a patch is allowed",
+          repeated_runs.outcome.value == "fixed", repeated_runs.outcome.value)
+
+    # --- green test, but the model does not claim it ---------------------
+    report, events = _run([
+        _turn("HYPOTHESIS: patch", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: check", "run_tests", {}),
+        _turn("HYPOTHESIS: I think we are done", "finish", {"summary": "fixed"}),
+    ])
+    prompts = [c["messages"][-1]["content"] for c in _last_replay.calls]
+    check("passing test triggers a finish directive",
+          "Call finish now" in prompts[-1], prompts[-1][-160:])
+    check("directive did not delay the fix", report.outcome is Outcome.FIXED)
+
+    # --- degenerate model behaviour --------------------------------------
+    report, _ = _run([_turn("HYPOTHESIS: thinking out loud, no action") for _ in range(2)],
+                     cfg=Config(loop=LoopConfig(max_iterations=2)))
+    check("turns without a tool call are survived", report.outcome is Outcome.BUDGET_EXHAUSTED,
+          report.outcome.value)
+    check("no-action turns still cost budget", report.iterations == 2)
+
+    report, _ = _run([_turn("HYPOTHESIS: x", "apply_patch", {"diff": REAL_FIX})],
+                     cfg=Config(loop=LoopConfig(max_iterations=1)))
+    check("budget limit is enforced", report.outcome is Outcome.BUDGET_EXHAUSTED,
+          report.outcome.value)
+
+    # --- task hygiene ----------------------------------------------------
+    report, events = _run([], target="tests/test_cart.py::test_subtotal")
+    check("already-green task refused", report.iterations == 0)
+    check("refusal is not a success", report.outcome is not Outcome.FIXED)
+    check("invalid task traced",
+          any(e.get("detail") == "target test already passes" for e in events))
+
+
 # ---------------------------------------------------------------------------
 # live
 # ---------------------------------------------------------------------------
@@ -509,7 +836,9 @@ SUITES = {
     "traceback_parse": suite_traceback_parse,
     "slicer": suite_slicer,
     "budget": suite_budget,
-    # "tools": suite_tools,        # next
+    "tools": suite_tools,
+    "loop": suite_loop,
+    # "benchmark": suite_benchmark,   # next
 }
 
 

@@ -50,6 +50,7 @@ class LLM(Protocol):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        force_tool: bool = False,
     ) -> Completion: ...
 
 
@@ -76,8 +77,13 @@ class OpenAICompatibleLLM:
         )
         self._dropped: set[str] = set()
 
-    def complete(self, messages, tools) -> Completion:
-        return normalise_response(self._post_with_retries(self._build_payload(messages, tools)))
+    def complete(self, messages, tools, force_tool: bool = False) -> Completion:
+        payload = self._build_payload(messages, tools)
+        if force_tool and tools:
+            # Used only after a turn that produced prose and no action: the
+            # model has already shown it will not choose on its own.
+            payload["tool_choice"] = "required"
+        return normalise_response(self._post_with_retries(payload))
 
     def close(self) -> None:
         self._client.close()
@@ -245,8 +251,8 @@ class ReplayLLM:
                     events.append(obj["response"])
         return cls(events)
 
-    def complete(self, messages, tools) -> Completion:
-        self.calls.append({"messages": messages, "tools": tools})
+    def complete(self, messages, tools, force_tool: bool = False) -> Completion:
+        self.calls.append({"messages": messages, "tools": tools, "force_tool": force_tool})
         if not self._queue:
             raise LLMTransportError("Replay exhausted: trace has no further model calls.")
         return normalise_response(self._queue.pop(0))
