@@ -43,7 +43,8 @@ class Agent:
         budget = BudgetTracker(self.cfg.loop)
         stagnation = StagnationDetector(self.cfg.loop.stagnation_threshold)
         repeats = RepeatDetector(self.cfg.loop.max_read_streak,
-                                 self.cfg.loop.max_blocked_repeats)
+                                 self.cfg.loop.max_blocked_repeats,
+                                 enabled=self.cfg.loop.repeat_detection)
         outcome = Outcome.ERROR
         final_diff = ""
 
@@ -65,7 +66,8 @@ class Agent:
             if result.passed:
                 tracer.emit("run_end", outcome="invalid_task",
                             detail="target test already passes")
-                return RunReport(task_id, Outcome.ERROR, 0, 0, _elapsed(started), "", steps)
+                return RunReport(task_id, Outcome.ERROR, 0, 0, _elapsed(started), "", steps,
+                                 trace_path=str(tracer.path()))
 
             directive: str | None = None
             fixed = False
@@ -109,6 +111,7 @@ class Agent:
             wall_time_s=_elapsed(started),
             final_diff=final_diff,
             steps=steps,
+            trace_path=str(tracer.path()),
         )
 
     # -- one iteration -----------------------------------------------------

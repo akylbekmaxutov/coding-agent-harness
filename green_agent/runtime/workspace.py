@@ -11,6 +11,18 @@ _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".git"
 _GIT_ID = ("-c", "user.name=green-agent", "-c", "user.email=agent@localhost")
 
 
+def is_test_path(rel_path: str, test_globs: tuple[str, ...]) -> bool:
+    """Whether a repo-relative path is a test file.
+
+    Module-level because two callers must agree on it: the guard that refuses
+    the edit, and any scorer deciding whether a run cheated. If they disagreed,
+    the no-test-guard ablation would grade itself.
+    """
+    norm = str(rel_path).replace("\\", "/").lstrip("./")
+    name = norm.rsplit("/", 1)[-1]
+    return any(fnmatch(norm, g) or fnmatch(name, g) for g in test_globs)
+
+
 class WorkspaceError(RuntimeError):
     pass
 
@@ -88,9 +100,7 @@ class Workspace:
         return candidate
 
     def is_test_file(self, rel_path: str) -> bool:
-        norm = str(rel_path).replace("\\", "/").lstrip("./")
-        name = norm.rsplit("/", 1)[-1]
-        return any(fnmatch(norm, g) or fnmatch(name, g) for g in self.test_globs)
+        return is_test_path(rel_path, self.test_globs)
 
     # -- state -------------------------------------------------------------
 

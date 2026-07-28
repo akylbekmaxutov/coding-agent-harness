@@ -1,0 +1,9 @@
+{
+  "task_id": "agentlib-loose-brace-check",
+  "project": "agentlib",
+  "target_test": "tests/test_jsonargs.py::test_prose_that_opens_a_brace_is_not_arguments",
+  "bug": "bug.patch",
+  "note": "`and` loosened to `or`, so a sentence beginning with a brace is reported as malformed JSON instead of as prose.",
+  "shape": "inverted boolean",
+  "traceback": "away from the bug"
+}

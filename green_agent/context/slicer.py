@@ -132,6 +132,9 @@ def slices_for_failure(
     in_repo = [f for f in frames if f.in_repo]
     ordered = list(reversed(in_repo))                 # innermost first
 
+    if cfg.whole_file_context:
+        return whole_files(repo_root, ordered)
+
     roots: list[Symbol] = []
     for frame in ordered:
         sym = index.enclosing(frame.path, frame.lineno)
@@ -159,6 +162,39 @@ def slices_for_failure(
         if not frontier:
             break
 
+    return slices
+
+
+def whole_files(repo_root: str | Path, frames) -> list[CodeSlice]:
+    """Every file the traceback named, entire. The no-slicing baseline.
+
+    Deliberately the same entry points as the slicer with the AST work removed,
+    so the ablation measures symbol extraction and call-graph expansion rather
+    than a different retrieval strategy. It is a weak baseline on purpose: a
+    plain assertion names only the test file, and dumping that whole file still
+    does not contain the bug.
+    """
+    root = Path(repo_root)
+    slices: list[CodeSlice] = []
+    seen: set[str] = set()
+    for frame in frames:
+        if frame.path in seen:
+            continue
+        seen.add(frame.path)
+        try:
+            source = (root / frame.path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        slices.append(
+            CodeSlice(
+                path=frame.path,
+                symbol="<module>",
+                start_line=1,
+                end_line=len(source.splitlines()) or 1,
+                source=source,
+                reason="whole file (slicing disabled)",
+            )
+        )
     return slices
 
 

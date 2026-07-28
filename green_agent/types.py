@@ -126,3 +126,6 @@ class RunReport:
     wall_time_s: float
     final_diff: str
     steps: list[Step] = field(default_factory=list)
+    # Where the run wrote its JSONL. Triage starts by opening this file, so the
+    # report has to carry it rather than making the reader guess at timestamps.
+    trace_path: str = ""

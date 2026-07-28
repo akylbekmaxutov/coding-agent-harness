@@ -1,0 +1,9 @@
+{
+  "task_id": "backend-unknown-action-no-early-return",
+  "project": "backend",
+  "target_test": "tests/test_service.py::test_unknown_action_is_a_bad_request",
+  "bug": "bug.patch",
+  "note": "The guard that answers an unroutable request is gone, so an unknown action calls None and raises TypeError past the AppError handler.",
+  "shape": "missing early return",
+  "traceback": "at the bug"
+}

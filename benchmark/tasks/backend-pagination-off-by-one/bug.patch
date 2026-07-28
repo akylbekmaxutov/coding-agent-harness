@@ -1,0 +1,11 @@
+--- a/pagination.py
++++ b/pagination.py
+@@ -25,7 +25,7 @@
+         return 0
+     # Ceiling division: a partial final page still counts, and a total that
+     # divides exactly must not produce an empty extra page on the end.
+-    return (total + size - 1) // size
++    return total // size + 1
+ 
+ 
+ def window(page: int, size: int) -> tuple[int, int]:

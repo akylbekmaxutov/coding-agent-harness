@@ -93,9 +93,13 @@ class RepeatDetector:
 
     READ_ONLY = {"read_file"}
 
-    def __init__(self, max_read_streak: int = 2, max_blocked: int = 3) -> None:
+    def __init__(self, max_read_streak: int = 2, max_blocked: int = 3,
+                 enabled: bool = True) -> None:
         self.max_read_streak = max(1, max_read_streak)
         self.max_blocked = max(1, max_blocked)
+        # Disabled is an ablation axis, never a fix. Both signals go together:
+        # they are one policy, and half of it is not a result anyone can read.
+        self.enabled = enabled
         self._seen: set[str] = set()
         self.read_streak = 0
         self.blocked = 0
@@ -106,7 +110,7 @@ class RepeatDetector:
         return f"{state}:{call.name}({arguments})"
 
     def is_repeat(self, call, state: str = "") -> bool:
-        return self.signature(call, state) in self._seen
+        return self.enabled and self.signature(call, state) in self._seen
 
     def note(self, call, state: str = "") -> None:
         self._seen.add(self.signature(call, state))
@@ -117,7 +121,7 @@ class RepeatDetector:
 
     @property
     def should_force_action(self) -> bool:
-        return self.read_streak >= self.max_read_streak
+        return self.enabled and self.read_streak >= self.max_read_streak
 
     @property
     def exhausted_repeats(self) -> bool:
@@ -126,7 +130,7 @@ class RepeatDetector:
         Without this the two no-progress detectors disagree: blocking a call
         stops the agent learning nothing new, but nothing ends the run.
         """
-        return self.blocked >= self.max_blocked
+        return self.enabled and self.blocked >= self.max_blocked
 
 
 class BudgetTracker:

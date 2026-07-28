@@ -1,0 +1,9 @@
+{
+  "task_id": "datalib-top-n-default",
+  "project": "datalib",
+  "target_test": "tests/test_aggregate.py::test_top_groups_defaults_to_three",
+  "bug": "bug.patch",
+  "note": "The default limit lives in a module constant, not in the signature the slicer emits, so the wrong value is invisible in sliced context.",
+  "shape": "wrong default value",
+  "traceback": "away from the bug"
+}

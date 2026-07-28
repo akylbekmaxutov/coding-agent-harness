@@ -1,0 +1,9 @@
+{
+  "task_id": "agentlib-backoff-swapped-args",
+  "project": "agentlib",
+  "target_test": "tests/test_retry.py::test_delay_grows_geometrically",
+  "bug": "bug.patch",
+  "note": "base and attempt handed to backoff_delay the wrong way round, so the first retry waits zero seconds and the curve is wrong thereafter.",
+  "shape": "swapped argument order",
+  "traceback": "away from the bug"
+}

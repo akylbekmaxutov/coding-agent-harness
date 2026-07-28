@@ -1,0 +1,14 @@
+--- a/service.py
++++ b/service.py
+@@ -43,11 +43,6 @@
+ 
+ def handle(request: dict, store) -> dict:
+     handler = ROUTES.get(request.get("action"))
+-    # An unroutable request is the caller's mistake, and it has to be answered
+-    # here: past this point there is no handler to raise anything.
+-    if handler is None:
+-        unknown = BadRequest(f"unknown action {request.get('action')!r}")
+-        return {"status": status_for(unknown), "body": error_body(unknown)}
+     try:
+         return handler(request, store)
+     except AppError as exc:

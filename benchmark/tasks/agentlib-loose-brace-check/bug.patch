@@ -1,0 +1,11 @@
+--- a/jsonargs.py
++++ b/jsonargs.py
+@@ -22,7 +22,7 @@
+     # and calling it malformed JSON sends the caller looking for a syntax error
+     # that is not there.
+     chunk = chunk.strip()
+-    return chunk.startswith("{") and chunk.endswith("}")
++    return chunk.startswith("{") or chunk.endswith("}")
+ 
+ 
+ def extract_object(text: str) -> dict:

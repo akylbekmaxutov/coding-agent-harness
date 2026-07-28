@@ -1,0 +1,9 @@
+{
+  "task_id": "backend-pagination-off-by-one",
+  "project": "backend",
+  "target_test": "tests/test_pagination.py::test_last_page_is_not_empty",
+  "bug": "bug.patch",
+  "note": "Ceiling division replaced by floor-plus-one, so a total that divides exactly by the page size gains an empty page on the end.",
+  "shape": "off-by-one",
+  "traceback": "away from the bug"
+}

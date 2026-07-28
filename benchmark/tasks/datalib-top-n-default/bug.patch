@@ -1,0 +1,11 @@
+--- a/aggregate.py
++++ b/aggregate.py
+@@ -6,7 +6,7 @@
+ 
+ from coerce import to_float
+ 
+-DEFAULT_TOP_N = 3
++DEFAULT_TOP_N = 1
+ 
+ 
+ @dataclass(frozen=True)

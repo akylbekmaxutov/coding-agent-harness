@@ -1,0 +1,9 @@
+{
+  "task_id": "datalib-single-row-mean",
+  "project": "datalib",
+  "target_test": "tests/test_aggregate.py::test_group_of_one_averages_to_its_own_value",
+  "bug": "bug.patch",
+  "note": "The empty-group guard now excludes groups of one as well, so a single row averages to 0.0 instead of its own value.",
+  "shape": "wrong comparison operator",
+  "traceback": "away from the bug"
+}

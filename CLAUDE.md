@@ -1,0 +1,122 @@
+# CLAUDE.md
+
+Context for Claude Code working in this repository. Read this before editing.
+
+## What this project is
+
+`green-agent` is an AI coding agent that fixes **one failing test**. It is a
+take-home assignment about **harness engineering** — everything except the
+model. A reviewer will judge: how the problem was framed, what choices were
+made, whether it works, how that was checked, and how clearly it is explained.
+
+The success criterion is machine-checkable and non-negotiable:
+
+- the target test passes, **and**
+- no test file was modified, **and**
+- the rest of the suite still passes.
+
+The model proposes; the harness verifies. `finish()` is a claim, not an ending.
+
+## Current state
+
+Complete and working: `types`, `config`, `llm`, `runtime/`, `context/`,
+`tools/`, `policy/`, `observability/`, `prompts`, `loop`, `cli`, `demo_repo`.
+195 offline checks pass. The agent fixes the demo bug against a live model in
+about 3–4 iterations.
+
+Not built yet: `benchmark/` (only a README describing intent). Scope decision
+already made: the benchmark is **Python/pytest only** — no second language
+runner. See `PROMPT_benchmark.md`.
+
+When the benchmark exposes a defect in `green_agent/`, fixing the harness takes
+priority over adding benchmark tasks. Every harness fix needs a regression check
+in `scripts/initial_test.py` and a line in the README.
+
+## Layout
+
+```
+green_agent/
+  types.py          records every module agrees on; Failure.fingerprint()
+  config.py         every knob; .env loading; resolve_api_key()
+  llm.py            provider client, retries, param adaptation, ReplayLLM
+  prompts.py        prompt rebuilt each turn; forced HYPOTHESIS line
+  loop.py           orchestrator; the least clever file, keep it that way
+  cli.py            `fix` and `replay`; exit 0 fixed / 1 not fixed / 2 error
+  runtime/          workspace.py (git worktree, path jail), pytest_runner.py
+  context/          traceback_parse.py, slicer.py (AST), budget.py
+  tools/            registry.py + read_file, apply_patch, run_tests, finish
+  policy/           guards.py: stagnation, repeats, budget
+  observability/    trace.py: one JSONL per run
+demo_repo/          5-test cart with one real bug
+scripts/
+  initial_test.py   the standing gate — every module has a suite here
+benchmark/          to be built
+```
+
+## Commands
+
+```bash
+python scripts/initial_test.py             # all offline suites; must be 0 exit
+python scripts/initial_test.py --only llm  # one suite while iterating
+python scripts/initial_test.py --list      # suite names
+python scripts/initial_test.py --live      # one real model call, key from .env
+
+python -m green_agent.cli fix --repo demo_repo \
+  --test "tests/test_cart.py::test_discount_can_lose_free_shipping" --show-diff
+python -m green_agent.cli replay --trace <trace.jsonl> --repo demo_repo --test <node>
+```
+
+Model: `gpt-5.6-luna`, `reasoning_effort="none"`, key in `.env` as `OPENAI_KEY`.
+Reasoning effort is a design constraint: there is no hidden deliberation, so
+all decomposition must live in the harness.
+
+## Invariants — do not break these
+
+1. **The model never decides success.** Verification is always an independent
+   test run by the harness.
+2. **Test files are never editable by the agent.** A test-verified agent will
+   otherwise patch the assertion instead of the bug.
+3. **One tool call per turn.** Extra calls are dropped and counted.
+4. **Mutations go through unified diffs only**, checked with `git apply --check`
+   before anything is written. No whole-file writes, no `bash` tool.
+5. **Bad model output never raises.** It becomes a `ToolResult(ok=False)` whose
+   text is written for the model to read. Only an unusable endpoint raises.
+6. **Everything the agent touches lives in a throwaway git worktree.** The
+   caller's checkout is never modified.
+7. **Every knob lives in `config.py`.** No magic numbers elsewhere; each knob is
+   a potential benchmark ablation.
+
+## Conventions
+
+- Comments explain **why**, never what. No narration of obvious code.
+- Design rationale belongs in `README.md`, not in docstrings.
+- Dataclasses, not dicts, across module boundaries.
+- New module ⇒ new `suite_<name>()` in `scripts/initial_test.py`, registered in
+  `SUITES`. Never commit with the runner red.
+- Conventional Commits: `feat(scope): ...`, `fix:`, `test:`, `docs:`.
+
+## Lessons already paid for — do not repeat them
+
+- **Never anchor a check on file content or line numbers.** Four separate
+  failures came from this: a hard-coded line number in a `read_file` check, and
+  three hard-coded diff contexts. Generate diffs from the real file with
+  `difflib`, assert the transform changed something, or anchor on position
+  (append at EOF / prepend at line 1).
+- **A check that can pass vacuously is not evidence.** A scenario must assert
+  its own preconditions (the patch applied, the error occurred) before asserting
+  the outcome.
+- **Verify that an edit landed**, not just that checks still pass. One edit
+  silently matched nothing and the suite stayed green while the feature was
+  missing. Print the real artifact (the prompt, the diff) when behaviour is
+  supposed to change.
+- **A scripted scenario must outlast its iteration cap.** If `ReplayLLM` runs
+  dry the loop reports a transport error, which reads as a policy failure but is
+  a fixture failure — and any check phrased as "outcome is not FIXED" passes for
+  the wrong reason. `_run()` now names this case explicitly.
+- **Injected bugs must be observable.** The first demo bug applied a discount
+  after tax instead of before — arithmetically identical, so no test could
+  detect it. Every injected bug needs a test that actually fails.
+- **Two no-progress detectors, because they see different things.**
+  `StagnationDetector` watches test results; `RepeatDetector` watches repeated
+  calls against an unchanged workspace. The first live run failed because only
+  the former existed and the model never ran tests.

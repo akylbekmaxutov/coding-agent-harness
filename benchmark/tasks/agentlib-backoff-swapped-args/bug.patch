@@ -1,0 +1,11 @@
+--- a/retry.py
++++ b/retry.py
+@@ -20,7 +20,7 @@
+ 
+ 
+ def next_delay(policy: RetryPolicy, attempt: int) -> float:
+-    return backoff_delay(policy.base_delay, attempt, policy.factor, policy.max_delay)
++    return backoff_delay(attempt, policy.base_delay, policy.factor, policy.max_delay)
+ 
+ 
+ def should_retry(policy: RetryPolicy, attempt: int, error: BaseException) -> bool:
