@@ -20,7 +20,10 @@ class ModelConfig:
 @dataclass(frozen=True)
 class ContextConfig:
     max_context_tokens: int = 12_000
-    callee_depth: int = 1
+    # Depth 2, not 1: a plain `assert` failure yields a traceback with only
+    # the test frame, so reaching the buggy function takes test -> caller ->
+    # callee. Measured on demo_repo; an ablation axis for the benchmark.
+    callee_depth: int = 2
     include_external_frames: bool = False
     max_raw_output_chars: int = 4_000
 

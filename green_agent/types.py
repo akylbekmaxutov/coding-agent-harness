@@ -70,7 +70,9 @@ class CodeSlice:
     reason: str        # "traceback frame" | "callee of X" | "requested by agent"
 
     def token_estimate(self) -> int:
-        raise NotImplementedError
+        from .context.budget import estimate_tokens
+
+        return estimate_tokens(self.source) + 8   # header line the prompt adds
 
 
 # --------------------------------------------------------------------------

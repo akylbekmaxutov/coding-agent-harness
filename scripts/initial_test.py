@@ -26,9 +26,13 @@ import httpx
 
 from green_agent.config import GuardConfig, ModelConfig, load_dotenv, resolve_api_key
 from green_agent.llm import LLMTransportError, OpenAICompatibleLLM, ReplayLLM
+from green_agent.config import ContextConfig
+from green_agent.context.budget import estimate_tokens, fit, signature_only
+from green_agent.context.slicer import SymbolIndex, slices_for_failure
 from green_agent.context.traceback_parse import parse_failures
 from green_agent.runtime import pytest_runner
 from green_agent.runtime.workspace import PathEscape, Workspace
+from green_agent.types import Frame
 
 DEMO = Path(__file__).resolve().parents[1] / "demo_repo"
 
@@ -395,6 +399,83 @@ def suite_traceback_parse() -> None:
     check("empty report yields nothing", parse_failures("4 passed in 0.02s", DEMO) == ())
 
 
+def _demo_failure(ws):
+    node = "tests/test_cart.py::test_discount_can_lose_free_shipping"
+    return pytest_runner.run(ws.root, node, timeout_s=60).failures[0]
+
+
+def suite_slicer() -> None:
+    with Workspace(DEMO) as ws:
+        index = SymbolIndex(ws.root)
+        check("functions indexed", "make_cart" in index.functions)
+        check("methods indexed", "shipping_fee" in index.methods)
+        check("imports recorded", index.imports["tests/test_cart.py"].get("Cart") == "cart")
+
+        failure = _demo_failure(ws)
+        slices = slices_for_failure(ws.root, failure.frames, ContextConfig(), index)
+        names = {s.symbol for s in slices}
+
+        check("traceback frame sliced", "test_discount_can_lose_free_shipping" in names)
+        check("callee across modules resolved", "Cart.total" in names)
+        check("buggy function reached at depth 2", "Cart.shipping_fee" in names, str(names))
+        check("class body not emitted whole", "Cart" not in names, str(names))
+        check("no duplicate slices", len(names) == len(slices))
+
+        buggy = next(s for s in slices if s.symbol == "Cart.shipping_fee")
+        check("slice is a whole function", buggy.source.lstrip().startswith("def shipping_fee"))
+        check("slice ends inside the function",
+              buggy.source.rstrip().endswith("return SHIPPING_FEE"), buggy.source[-40:])
+        check("slice carries real line numbers",
+              ws.resolve("cart.py").read_text().splitlines()[buggy.start_line - 1].strip()
+              == "def shipping_fee(self, discount_percent: float = 0.0) -> float:")
+        check("reason recorded for the trace", buggy.reason.startswith("called by"))
+
+        shallow = slices_for_failure(ws.root, failure.frames, ContextConfig(callee_depth=1), index)
+        check("depth 1 misses the bug (ablation axis)",
+              "Cart.shipping_fee" not in {s.symbol for s in shallow})
+        check("depth 1 is cheaper", sum(s.token_estimate() for s in shallow)
+              < sum(s.token_estimate() for s in slices))
+
+        whole_files = len(ws.resolve("cart.py").read_text()) + len(
+            ws.resolve("tests/test_cart.py").read_text())
+        sliced = sum(len(s.source) for s in slices)
+        check("slicing beats dumping both files", sliced < whole_files,
+              f"{sliced} vs {whole_files}")
+
+        external = (Frame(path="/usr/lib/python3.12/json/decoder.py", lineno=1,
+                          function="decode", in_repo=False),)
+        check("external frames contribute nothing",
+              slices_for_failure(ws.root, external, ContextConfig(), index) == [])
+
+
+def suite_budget() -> None:
+    with Workspace(DEMO) as ws:
+        slices = slices_for_failure(ws.root, _demo_failure(ws).frames, ContextConfig())
+        total = sum(s.token_estimate() for s in slices)
+
+        kept, degraded = fit(slices, 10_000)
+        check("everything fits under a generous ceiling", kept == slices and not degraded)
+
+        kept, degraded = fit(slices, total - slices[-1].token_estimate())
+        check("least important slice dropped first", len(kept) == len(slices) - 1)
+        check("dropping is not degradation", degraded is False)
+        check("kept slices stay within budget",
+              sum(s.token_estimate() for s in kept) <= total - slices[-1].token_estimate())
+
+        kept, degraded = fit(slices, 5)
+        check("starvation flagged", degraded is True)
+        check("starved context keeps one signature", len(kept) == 1)
+        check("signature has no body",
+              "context budget exceeded" in kept[0].source and "return" not in kept[0].source)
+        check("signature keeps the def line", kept[0].source.lstrip().startswith("def "))
+
+        check("empty input is not degraded", fit([], 100) == ([], False))
+        check("token estimate scales with text",
+              estimate_tokens("x" * 400) > estimate_tokens("x" * 40))
+        check("signature_only preserves location",
+              signature_only(slices[0]).start_line == slices[0].start_line)
+
+
 # ---------------------------------------------------------------------------
 # live
 # ---------------------------------------------------------------------------
@@ -426,7 +507,9 @@ SUITES = {
     "workspace": suite_workspace,
     "pytest_runner": suite_pytest_runner,
     "traceback_parse": suite_traceback_parse,
-    # "slicer": suite_slicer,      # next
+    "slicer": suite_slicer,
+    "budget": suite_budget,
+    # "tools": suite_tools,        # next
 }
 
 
