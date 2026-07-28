@@ -13,9 +13,11 @@ from .policy.guards import (
     FORCE_ACTION_DIRECTIVE,
     REPEAT_DIRECTIVE,
     REPLAN_DIRECTIVE,
+    VERIFY_DIRECTIVE,
     BudgetTracker,
     RepeatDetector,
     StagnationDetector,
+    VerificationTracker,
     classify_outcome,
 )
 from .prompts import build_messages
@@ -45,6 +47,7 @@ class Agent:
         repeats = RepeatDetector(self.cfg.loop.max_read_streak,
                                  self.cfg.loop.max_blocked_repeats,
                                  enabled=self.cfg.loop.repeat_detection)
+        verification = VerificationTracker(self.cfg.loop.max_unverified_edits)
         outcome = Outcome.ERROR
         final_diff = ""
 
@@ -54,7 +57,7 @@ class Agent:
         try:
             workspace.setup()
             ctx = ToolContext(workspace=workspace, config=self.cfg, target_test=target_test)
-            index = SymbolIndex(workspace.root)
+            index = SymbolIndex(workspace.root, state=workspace.state_token())
 
             result = pytest_runner.run(
                 workspace.root, target_test, self.cfg.guards.pytest_timeout_s
@@ -78,7 +81,8 @@ class Agent:
 
             while not budget.exhausted:
                 step, directive, fixed, healthy = self._turn(
-                    ctx, index, tracer, steps, stagnation, repeats, directive, healthy
+                    ctx, index, tracer, steps, stagnation, repeats, verification,
+                    directive, healthy
                 )
                 steps.append(step)
                 budget.charge(step)
@@ -116,7 +120,12 @@ class Agent:
 
     # -- one iteration -----------------------------------------------------
 
-    def _turn(self, ctx, index, tracer, steps, stagnation, repeats, directive, healthy):
+    def _turn(self, ctx, index, tracer, steps, stagnation, repeats, verification,
+              directive, healthy):
+        workspace_state = ctx.workspace.state_token()
+        if index.refresh_if_changed(workspace_state):
+            tracer.emit("index_refreshed", state=workspace_state)
+
         result: TestResult = ctx.last_result
         failure = result.failures[0] if result.failures else None
         slices, degraded = fit(
@@ -154,18 +163,27 @@ class Agent:
 
         # No action, or arguments we could not parse: hand the reason back and
         # spend the turn. Both are normal model behaviour, not harness faults.
+        #
+        # The incoming directive is carried forward rather than replaced. A turn
+        # that did nothing does not answer it, and dropping it loses the finish
+        # instruction at the exact moment the model is floundering -- a live run
+        # went green on turn 7 and then spent five turns and the whole budget
+        # never being told again that it was done.
         if completion.tool_call is None:
             step.result = ToolResult(call_id="", ok=False, content=_NO_ACTION)
-            return step, None, False, healthy
+            return step, _join(directive, _NO_ACTION), False, healthy
         if completion.parse_error:
             step.result = ToolResult(call_id=completion.tool_call.call_id, ok=False,
                                      content=completion.parse_error)
-            return step, None, False, healthy
+            return step, _join(directive, completion.parse_error), False, healthy
 
         # An identical call cannot produce new information, so it is blocked
         # rather than dispatched: the turn is spent either way, but the model
         # gets told why instead of reading the same file again.
-        state = ctx.workspace.state_token()
+        # The workspace, plus what the model has been told. A rejection changes
+        # what it knows without changing what is on disk, and a call that was
+        # uninformative before the rejection may be the right move after it.
+        state = f"{workspace_state}/{repeats.rejections}"
         if repeats.is_repeat(completion.tool_call, state):
             # A blocked turn is still a turn spent reading nothing new, so it
             # counts toward the streak that forces an edit.
@@ -184,13 +202,19 @@ class Agent:
         repeats.note(completion.tool_call, state)
         result_obj = dispatch(completion.tool_call, ctx)
         step.result = result_obj
+        if not result_obj.ok:
+            repeats.note_rejection()
         tracer.emit("tool_result", tool=completion.tool_call.name, ok=result_obj.ok,
                     content=result_obj.content[:400], meta=result_obj.meta)
 
         next_directive: str | None = None
         fixed = False
 
+        if completion.tool_call.name == "apply_patch" and result_obj.ok:
+            verification.note_edit()
+
         if completion.tool_call.name == "run_tests":
+            verification.note_test_run()
             stagnation.observe(ctx.last_result)
             if ctx.last_result.collect_error:
                 ctx.workspace.restore(healthy)
@@ -222,6 +246,12 @@ class Agent:
                     "Keep working from the failure shown above."
                 )
 
+        # Before the read-streak nudge: an unverified edit is the more specific
+        # problem, and telling the model to act when it has just acted is noise.
+        if next_directive is None and verification.should_verify:
+            tracer.emit("unverified_edit", edits=verification.unverified)
+            next_directive = VERIFY_DIRECTIVE
+
         if next_directive is None and repeats.should_force_action:
             tracer.emit("read_streak", turns=repeats.read_streak)
             next_directive = FORCE_ACTION_DIRECTIVE
@@ -251,3 +281,7 @@ class Agent:
 
 def _elapsed(started: float) -> float:
     return round(time.monotonic() - started, 3)
+
+
+def _join(*parts: str | None) -> str | None:
+    return "\n".join(part for part in parts if part) or None

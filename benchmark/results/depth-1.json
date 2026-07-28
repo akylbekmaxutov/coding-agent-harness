@@ -1,0 +1,286 @@
+{
+  "ablation": "depth-1",
+  "overrides": "context.callee_depth=1",
+  "model": "gpt-5.6-luna",
+  "created": "2026-07-28 16:29:19",
+  "config": {
+    "callee_depth": 1,
+    "max_context_tokens": 12000,
+    "whole_file_context": false,
+    "max_iterations": 12,
+    "repeat_detection": true,
+    "forbid_test_file_edits": true
+  },
+  "results": [
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 4,
+      "tokens": 4287,
+      "wall_time_s": 7.508,
+      "changed_files": [
+        "retry.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162521-agentlib-backoff-swapped-args.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 8,
+      "tokens": 10304,
+      "wall_time_s": 13.04,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162528-agentlib-loose-brace-check.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "unsolved",
+      "outcome": "budget",
+      "iterations": 12,
+      "tokens": 17602,
+      "wall_time_s": 19.339,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162541-backend-pagination-off-by-one.jsonl",
+      "detail": "budget"
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 6086,
+      "wall_time_s": 8.179,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162601-backend-unknown-action-no-early-return.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "unsolved",
+      "outcome": "budget",
+      "iterations": 12,
+      "tokens": 15866,
+      "wall_time_s": 18.32,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162609-datalib-single-row-mean.jsonl",
+      "detail": "budget"
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "depth-1",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 6,
+      "tokens": 6530,
+      "wall_time_s": 9.864,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162627-datalib-top-n-default.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "unsolved",
+      "outcome": "budget",
+      "iterations": 12,
+      "tokens": 15999,
+      "wall_time_s": 19.868,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162637-agentlib-backoff-swapped-args.jsonl",
+      "detail": "budget"
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 8,
+      "tokens": 10445,
+      "wall_time_s": 12.459,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162657-agentlib-loose-brace-check.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 9,
+      "tokens": 11449,
+      "wall_time_s": 13.573,
+      "changed_files": [
+        "pagination.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162710-backend-pagination-off-by-one.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 10,
+      "tokens": 12906,
+      "wall_time_s": 15.301,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162724-backend-unknown-action-no-early-return.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 5894,
+      "wall_time_s": 8.766,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162739-datalib-single-row-mean.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "depth-1",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 5518,
+      "wall_time_s": 7.691,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162748-datalib-top-n-default.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 10,
+      "tokens": 12744,
+      "wall_time_s": 16.835,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162755-agentlib-backoff-swapped-args.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 12,
+      "tokens": 16564,
+      "wall_time_s": 18.455,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162812-agentlib-loose-brace-check.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 9,
+      "tokens": 12659,
+      "wall_time_s": 15.317,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162831-backend-pagination-off-by-one.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 6110,
+      "wall_time_s": 8.405,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162846-backend-unknown-action-no-early-return.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "unsolved",
+      "outcome": "stagnated",
+      "iterations": 11,
+      "tokens": 14836,
+      "wall_time_s": 17.306,
+      "changed_files": [],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162855-datalib-single-row-mean.jsonl",
+      "detail": "stagnated"
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "depth-1",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 4,
+      "tokens": 4206,
+      "wall_time_s": 6.679,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/depth-1/20260728-162912-datalib-top-n-default.jsonl",
+      "detail": ""
+    }
+  ]
+}

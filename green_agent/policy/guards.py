@@ -19,6 +19,12 @@ FINISH_DIRECTIVE = (
     "the root cause; the harness will verify it and end the run."
 )
 
+VERIFY_DIRECTIVE = (
+    "You have changed the source and have not run the tests since. You cannot "
+    "tell whether that edit worked and neither can the harness, so do not make "
+    "another change on top of it. Call run_tests now."
+)
+
 REPLAN_DIRECTIVE = (
     "STOP. Your last attempt produced exactly the same failure as before, so "
     "the current hypothesis is wrong. Do not re-send an equivalent patch. "
@@ -103,6 +109,7 @@ class RepeatDetector:
         self._seen: set[str] = set()
         self.read_streak = 0
         self.blocked = 0
+        self.rejections = 0
 
     @staticmethod
     def signature(call, state: str = "") -> str:
@@ -119,6 +126,17 @@ class RepeatDetector:
     def note_blocked(self) -> None:
         self.blocked += 1
 
+    def note_rejection(self) -> None:
+        """A rejected call is new information, even with the workspace unchanged.
+
+        The loop folds this counter into the state it keys on. Without it the
+        harness contradicts itself: apply_patch rejects a diff and tells the
+        model to re-read the file, and this detector then blocks exactly that
+        re-read because nothing on disk moved. A live run died that way with
+        zero edits made.
+        """
+        self.rejections += 1
+
     @property
     def should_force_action(self) -> bool:
         return self.enabled and self.read_streak >= self.max_read_streak
@@ -131,6 +149,32 @@ class RepeatDetector:
         stops the agent learning nothing new, but nothing ends the run.
         """
         return self.enabled and self.blocked >= self.max_blocked
+
+
+class VerificationTracker:
+    """Counts edits made since the tests were last run.
+
+    The third no-progress detector, because the first two cannot see this one.
+    StagnationDetector watches test results, so an agent that never runs the
+    tests never moves it; RepeatDetector watches identical calls, so an agent
+    that invents a different patch every turn never trips it either. A live run
+    applied five distinct edits, verified none of them, and hit the budget with
+    a working fix somewhere in its own history.
+    """
+
+    def __init__(self, max_unverified: int = 1) -> None:
+        self.max_unverified = max(1, max_unverified)
+        self.unverified = 0
+
+    def note_edit(self) -> None:
+        self.unverified += 1
+
+    def note_test_run(self) -> None:
+        self.unverified = 0
+
+    @property
+    def should_verify(self) -> bool:
+        return self.unverified >= self.max_unverified
 
 
 class BudgetTracker:

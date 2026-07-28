@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 .green_agent/
 benchmark/traces/
+.green_agent
+.pytest_cache

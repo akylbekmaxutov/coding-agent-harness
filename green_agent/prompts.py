@@ -14,7 +14,16 @@ Rules:
 - Start every turn with `HYPOTHESIS: <one sentence>` before the tool call.
 - You may not edit test files; such patches are rejected.
 - Prefer the smallest edit that fixes the root cause. Do not refactor.
-- Diffs must use a/ and b/ prefixes and the exact context lines from the file.
+- apply_patch takes a plain unified diff and nothing else -- no envelope, no
+  prose, no fences. Line numbers in the @@ header are required:
+
+      --- a/module.py
+      +++ b/module.py
+      @@ -12,4 +12,4 @@
+       def total(self):
+      -    return self.a + self.b
+      +    return self.a * self.b
+       # trailing context
 - The code below is usually all you need. Use read_file only for a function
   that is not shown, and never twice with the same arguments.
 - Once you can name the wrong line, patch it. Do not re-read to be sure.
@@ -34,7 +43,9 @@ def render_task(repo_name: str, target_test: str) -> str:
 
 def render_failure(failure: Failure | None, raw_tail: str) -> str:
     if failure is None:
-        return f"Latest test output:\n{raw_tail}"
+        # No failure means the last run was green. Saying so beats printing raw
+        # output and leaving the model to work out what it is looking at.
+        return f"There is no current failure. Latest test output:\n{raw_tail}"
     lines = [
         "Current failure:",
         f"  {failure.test_id}",
@@ -94,9 +105,12 @@ def build_messages(
         render_task(repo_name, target_test),
         "",
         render_failure(failure, raw_tail),
-        "",
-        render_slices(slices),
     ]
+    # With no failure there is nothing to slice, and the empty-slices text tells
+    # the model to go and read a file -- the opposite of the finish directive it
+    # is being given in the same prompt.
+    if slices or failure is not None:
+        parts += ["", render_slices(slices)]
     hist = render_history(history)
     if hist:
         parts += ["", hist]

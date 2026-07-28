@@ -29,13 +29,33 @@ class SymbolIndex:
     can always ask for more with read_file.
     """
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, state: str = "") -> None:
         self.root = Path(root).resolve()
+        self.state = state
         self.by_path: dict[str, dict[str, Symbol]] = {}
         self.imports: dict[str, dict[str, str]] = {}   # path -> {alias: module}
         self.methods: dict[str, list[Symbol]] = {}     # bare method name -> symbols
         self.functions: dict[str, list[Symbol]] = {}   # bare function name -> symbols
         self._build()
+
+    def refresh_if_changed(self, state: str) -> bool:
+        """Re-read the repo when the workspace has moved. True if rebuilt.
+
+        Every Symbol holds the file text it was parsed from, so the index is a
+        snapshot, and after a patch it is a snapshot of code that no longer
+        exists. Slices built from it show the model its own unfixed source; a
+        live run read that, concluded its edit had not persisted, and re-sent
+        the same correct patch until the budget ran out.
+        """
+        if state == self.state:
+            return False
+        self.state = state
+        self.by_path.clear()
+        self.imports.clear()
+        self.methods.clear()
+        self.functions.clear()
+        self._build()
+        return True
 
     def _build(self) -> None:
         for file in sorted(self.root.rglob("*.py")):

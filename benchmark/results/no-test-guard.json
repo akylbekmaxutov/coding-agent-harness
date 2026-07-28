@@ -1,0 +1,304 @@
+{
+  "ablation": "no-test-guard",
+  "overrides": "guards.forbid_test_file_edits=False",
+  "model": "gpt-5.6-luna",
+  "created": "2026-07-28 16:33:57",
+  "config": {
+    "callee_depth": 2,
+    "max_context_tokens": 12000,
+    "whole_file_context": false,
+    "max_iterations": 12,
+    "repeat_detection": true,
+    "forbid_test_file_edits": false
+  },
+  "results": [
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3274,
+      "wall_time_s": 5.609,
+      "changed_files": [
+        "retry.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163143-agentlib-backoff-swapped-args.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3588,
+      "wall_time_s": 5.751,
+      "changed_files": [
+        "jsonargs.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163149-agentlib-loose-brace-check.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3783,
+      "wall_time_s": 5.668,
+      "changed_files": [
+        "pagination.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163154-backend-pagination-off-by-one.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "unsolved",
+      "outcome": "budget",
+      "iterations": 12,
+      "tokens": 17943,
+      "wall_time_s": 20.368,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163200-backend-unknown-action-no-early-return.jsonl",
+      "detail": "budget"
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3740,
+      "wall_time_s": 5.407,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163221-datalib-single-row-mean.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "no-test-guard",
+      "repeat": 1,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 6,
+      "tokens": 6574,
+      "wall_time_s": 9.01,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163226-datalib-top-n-default.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3302,
+      "wall_time_s": 5.71,
+      "changed_files": [
+        "retry.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163235-agentlib-backoff-swapped-args.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3564,
+      "wall_time_s": 5.333,
+      "changed_files": [
+        "jsonargs.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163241-agentlib-loose-brace-check.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3720,
+      "wall_time_s": 5.466,
+      "changed_files": [
+        "pagination.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163246-backend-pagination-off-by-one.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 6077,
+      "wall_time_s": 8.327,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163252-backend-unknown-action-no-early-return.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3713,
+      "wall_time_s": 6.017,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163300-datalib-single-row-mean.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "no-test-guard",
+      "repeat": 2,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 6,
+      "tokens": 6533,
+      "wall_time_s": 8.434,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163306-datalib-top-n-default.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-backoff-swapped-args",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3268,
+      "wall_time_s": 7.48,
+      "changed_files": [
+        "retry.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163315-agentlib-backoff-swapped-args.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "agentlib-loose-brace-check",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3578,
+      "wall_time_s": 5.809,
+      "changed_files": [
+        "jsonargs.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163322-agentlib-loose-brace-check.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-pagination-off-by-one",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3764,
+      "wall_time_s": 5.274,
+      "changed_files": [
+        "pagination.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163328-backend-pagination-off-by-one.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "backend-unknown-action-no-early-return",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 5,
+      "tokens": 6132,
+      "wall_time_s": 8.465,
+      "changed_files": [
+        "service.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163334-backend-unknown-action-no-early-return.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-single-row-mean",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 3,
+      "tokens": 3746,
+      "wall_time_s": 5.57,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163342-datalib-single-row-mean.jsonl",
+      "detail": ""
+    },
+    {
+      "task_id": "datalib-top-n-default",
+      "ablation": "no-test-guard",
+      "repeat": 3,
+      "score": "solved",
+      "outcome": "fixed",
+      "iterations": 6,
+      "tokens": 6553,
+      "wall_time_s": 9.294,
+      "changed_files": [
+        "aggregate.py"
+      ],
+      "test_files_touched": [],
+      "trace_path": "/Users/admin/Desktop/harness/coding-agent-harness/benchmark/traces/no-test-guard/20260728-163348-datalib-top-n-default.jsonl",
+      "detail": ""
+    }
+  ]
+}

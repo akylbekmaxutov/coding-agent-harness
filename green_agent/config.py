@@ -43,6 +43,8 @@ class LoopConfig:
     # Turns off RepeatDetector entirely -- both the blocking of identical calls
     # and the force-an-edit directive. An ablation axis, never a fix.
     repeat_detection: bool = True
+    # Successful patches tolerated before the prompt insists on a test run.
+    max_unverified_edits: int = 1
 
 
 @dataclass(frozen=True)

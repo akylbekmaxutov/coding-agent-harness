@@ -20,6 +20,7 @@ import os
 import pathlib
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -37,11 +38,17 @@ from green_agent.config import Config, GuardConfig as _GC, LoopConfig
 from green_agent.llm import ReplayLLM
 from green_agent.loop import Agent
 from green_agent.runtime.workspace import PathEscape, Workspace
-from green_agent.tools.apply_patch import changed_line_count, changed_paths
+from green_agent.tools.apply_patch import (
+    changed_line_count,
+    changed_paths,
+    renumber_bare_hunks,
+    unwrap_envelope,
+)
 from green_agent.tools.registry import ToolContext, dispatch, schemas
 from green_agent.types import Frame, ToolCall
 
 DEMO = Path(__file__).resolve().parents[1] / "demo_repo"
+TASKS = Path(__file__).resolve().parents[1] / "benchmark" / "tasks"
 
 _results: list[tuple[str, bool]] = []
 _GREEN, _RED, _DIM, _OFF = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
@@ -449,6 +456,28 @@ def suite_slicer() -> None:
         check("slicing beats dumping both files", sliced < whole_files,
               f"{sliced} vs {whole_files}")
 
+        # Every Symbol keeps the text it was parsed from, so the index is a
+        # snapshot. A run that patches and then looks again must not be shown
+        # the code it already replaced.
+        index = SymbolIndex(ws.root, state=ws.state_token())
+        source = ws.resolve("cart.py")
+        original = source.read_text()
+        # Edit inside a function body, so it is something a slice can carry at
+        # all: a module constant's value never appears in one.
+        source.write_text(original.replace("return SHIPPING_FEE", "return SHIPPING_FEE * 2"))
+        check("edit is on disk", "SHIPPING_FEE * 2" in source.read_text())
+        check("an unchanged workspace does not rebuild",
+              index.refresh_if_changed(index.state) is False)
+        check("a changed workspace rebuilds", index.refresh_if_changed(ws.state_token()) is True)
+
+        body = "\n".join(
+            s.source for s in slices_for_failure(ws.root, failure.frames, ContextConfig(), index))
+        check("slices follow the file after a patch", "return SHIPPING_FEE * 2" in body,
+              body[-300:])
+        check("stale source is gone", "return SHIPPING_FEE\n" not in body)
+        source.write_text(original)
+        index.refresh_if_changed(ws.state_token())
+
         external = (Frame(path="/usr/lib/python3.12/json/decoder.py", lineno=1,
                           function="decode", in_repo=False),)
         check("external frames contribute nothing",
@@ -487,18 +516,31 @@ NODE = "tests/test_cart.py::test_discount_can_lose_free_shipping"
 
 
 def _diff(path: str, transform) -> str:
-    """Build a unified diff against the real file.
+    """Build a unified diff against the real file in demo_repo."""
+    return _diff_in(DEMO, path, transform)
 
-    Hard-coding diff context makes a check depend on the exact bytes of
-    demo_repo, and a patch that silently fails to apply turns every downstream
+
+def _diff_in(root: Path, path: str, transform) -> str:
+    """Build a unified diff against the real file under `root`.
+
+    Hard-coding diff context makes a check depend on the exact bytes of a
+    fixture, and a patch that silently fails to apply turns every downstream
     check into a vacuous pass. Generating it means the scenario always happens.
     """
-    old = (DEMO / path).read_text()
+    old = (root / path).read_text()
     new = transform(old)
     assert new != old, f"transform did not change {path}"
-    return "".join(difflib.unified_diff(
+    diff = "".join(difflib.unified_diff(
         old.splitlines(True), new.splitlines(True),
         fromfile=f"a/{path}", tofile=f"b/{path}", n=3))
+    # A source file with no trailing newline makes difflib run the last removed
+    # line and the first added line together on one physical line. git rejects
+    # the result, so every scenario built on it passes for the wrong reason --
+    # the stagnation scenario ran for months on patches that never applied.
+    for line in diff.splitlines()[2:]:
+        assert line[:1] in (" ", "-", "+", "@", "\\"), (
+            f"malformed diff line for {path}: {line!r}")
+    return diff
 
 
 REAL_FIX = _diff("cart.py", lambda t: t.replace(
@@ -516,6 +558,17 @@ BREAKS_SYNTAX = _diff("cart.py", lambda t: "def oops(:\n" + t)
 # Distant regions so their diff contexts cannot overlap.
 NOOP_A = _diff("cart.py", lambda t: t.rstrip("\n") + "\n# noop A\n")
 NOOP_B = _diff("cart.py", lambda t: "# noop B\n" + t)
+
+
+def _envelope(diff: str) -> str:
+    """Re-wrap a unified diff the way models trained on apply_patch emit it.
+
+    Built from the diff rather than typed out, so it cannot drift away from
+    REAL_FIX and quietly stop exercising the real transform.
+    """
+    path = changed_paths(diff)[0]
+    body = [l for l in diff.splitlines() if not l.startswith(("--- ", "+++ "))]
+    return "\n".join(["*** Begin Patch", f"*** Update File: {path}", *body, "*** End Patch"])
 
 
 def _ctx(ws) -> ToolContext:
@@ -614,6 +667,60 @@ def suite_tools() -> None:
         check("finish records the claim", ctx.finish_summary.startswith("shipping_fee"))
         check("finish does not end the run by itself", "verify" in done.content)
 
+    # --- diff formats the model actually emits ----------------------------
+    # A live run lost a correct fix here: the model wrapped a valid hunk in the
+    # *** Begin Patch envelope -- the format its own tool name primes -- and the
+    # harness rejected it with advice about context lines that were never wrong.
+    envelope = _envelope(REAL_FIX)
+    unwrapped = unwrap_envelope(envelope)
+    check("envelope rewritten as a unified diff",
+          unwrapped.startswith("--- a/cart.py\n+++ b/cart.py\n@@"), unwrapped[:90])
+    check("envelope markers removed", "*** " not in unwrapped)
+    check("envelope keeps every changed line",
+          changed_line_count(unwrapped) == changed_line_count(REAL_FIX))
+    check("a plain diff is left alone", unwrap_envelope(REAL_FIX) == REAL_FIX)
+
+    with Workspace(DEMO, test_globs=Config().guards.test_path_globs) as ws:
+        ctx = _ctx(ws)
+        applied = _call(ctx, "apply_patch", diff=envelope)
+        check("enveloped patch applies", applied.ok is True, applied.content[:160])
+        check("enveloped patch edits the real file",
+              "apply_discount(discount_percent)" in ws.resolve("cart.py").read_text())
+        check("enveloped patch fixes the test",
+              _call(ctx, "run_tests").meta["passed"] is True)
+
+        # Both artefacts came off one trace: a closing envelope marker with no
+        # opening one, and a bare `@@`. The model sent this exact edit seven
+        # times and the harness refused every one of them.
+        bare = ("--- a/cart.py\n+++ b/cart.py\n@@\n"
+                "-TAX_RATE = 0.20\n+TAX_RATE = 0.25\n*** End Patch\n")
+        landed = _call(ctx, "apply_patch", diff=bare)
+        check("bare @@ hunk with a stray End Patch applies", landed.ok is True,
+              landed.content[:200])
+        check("bare hunk edited the right line",
+              "TAX_RATE = 0.25" in ws.resolve("cart.py").read_text())
+        check("bare hunk changed nothing else",
+              len(ws.changed_files()) == 1, str(ws.changed_files()))
+
+        numbered = renumber_bare_hunks(
+            "--- a/cart.py\n+++ b/cart.py\n@@\n-TAX_RATE = 0.25\n+TAX_RATE = 0.20\n",
+            ws.root)
+        check("renumbering finds the real line",
+              "@@ -3,1 +3,1 @@" in numbered, numbered)
+        check("an unplaceable hunk is left for git to reject",
+              "@@\n" in renumber_bare_hunks(
+                  "--- a/cart.py\n+++ b/cart.py\n@@\n-NOT_IN_THE_FILE = 1\n+X = 2\n", ws.root))
+        check("a numbered hunk is not rewritten",
+              renumber_bare_hunks(REAL_FIX, ws.root).strip() == REAL_FIX.strip())
+
+        no_hunk = "\n".join(l for l in REAL_FIX.splitlines() if not l.startswith("@@"))
+        bad = _call(ctx, "apply_patch", diff=no_hunk)
+        check("malformed diff refused", bad.ok is False)
+        check("format error is named as a format error",
+              "format problem" in bad.content, bad.content[:200])
+        check("format error does not blame the file's context lines",
+              "Re-read the file" not in bad.content, bad.content[:200])
+
     check("diff helper counts changed lines", changed_line_count(REAL_FIX) == 2)
     check("diff helper extracts paths", changed_paths(REAL_FIX) == ["cart.py"])
 
@@ -675,6 +782,50 @@ def suite_loop() -> None:
     check("verification traced", any(e["event"] == "verify" for e in events))
     check("trace is replayable",
           len(ReplayLLM([e["response"] for e in events if e["event"] == "model_call"])._queue) == 3)
+
+    # --- the model must be shown its own edits ---------------------------
+    # The index was built once per run and cached file text, so every prompt
+    # after the first patch showed pre-patch source. A live run applied the
+    # correct fix on turn 1, read back its own unfixed code, decided the edit
+    # had not persisted, and re-sent the same patch until the budget ran out.
+    report, events = _run([
+        _turn("HYPOTHESIS: shipping_fee ignores the discount", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: verify", "run_tests", {}),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "threshold checked pre-discount"}),
+    ])
+    prompts = [c["messages"][-1]["content"] for c in _last_replay.calls]
+    check("the first prompt shows the unfixed line",
+          "if self.subtotal() >= FREE_SHIPPING_THRESHOLD:" in prompts[0], prompts[0][:200])
+    check("the prompt after a patch shows the patched line",
+          "self.apply_discount(discount_percent) >= FREE_SHIPPING_THRESHOLD" in prompts[1],
+          prompts[1][:600])
+    check("the replaced line is gone from the prompt",
+          "if self.subtotal() >= FREE_SHIPPING_THRESHOLD:" not in prompts[1])
+    check("the rebuild is traced", any(e["event"] == "index_refreshed" for e in events))
+
+    # --- edits that are never verified ------------------------------------
+    # A live run applied five different patches and never once ran the tests.
+    # Neither existing detector can see that: the results never change because
+    # they are never taken, and no two calls are identical.
+    report, events = _run([
+        _turn("HYPOTHESIS: tweak one", "apply_patch", {"diff": NOOP_A}),
+        _turn("HYPOTHESIS: tweak two", "apply_patch", {"diff": NOOP_B}),
+        _turn("HYPOTHESIS: the real fix", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: check", "run_tests", {}),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "threshold checked pre-discount"}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=6)))
+    prompts = [c["messages"][-1]["content"] for c in _last_replay.calls]
+    check("the first patch really applied", report.steps[0].result.ok is True)
+    check("an unverified edit is called out next turn",
+          "Call run_tests now" in prompts[1], prompts[1][-220:])
+    check("it keeps being called out while unverified",
+          "Call run_tests now" in prompts[2], prompts[2][-220:])
+    check("unverified edits are traced",
+          any(e["event"] == "unverified_edit" for e in events))
+    check("running the tests clears it",
+          "Call run_tests now" not in prompts[4], prompts[4][-220:])
+    check("the directive did not prevent the fix", report.outcome is Outcome.FIXED,
+          report.outcome.value)
 
     # --- the model claims success without fixing anything -----------------
     report, _ = _run([
@@ -751,6 +902,32 @@ def suite_loop() -> None:
           "different action" in report.steps[1].result.content)
     check("read-only streak is flagged", any(e["event"] == "read_streak" for e in events))
 
+    # --- a rejection is new information ----------------------------------
+    # apply_patch tells a model whose diff was refused to re-read the file, and
+    # the repeat detector used to block exactly that re-read, because nothing on
+    # disk had changed. A live run died of stagnation here having made no edit.
+    report, events = _run([
+        _turn("HYPOTHESIS: look at it", "read_file", {"path": "cart.py"}),
+        _turn("HYPOTHESIS: look again", "read_file", {"path": "cart.py"}),
+        _turn("HYPOTHESIS: try a fix", "apply_patch", {"diff": "change the shipping logic"}),
+        _turn("HYPOTHESIS: re-read as instructed", "read_file", {"path": "cart.py"}),
+        _turn("HYPOTHESIS: now patch properly", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: verify", "run_tests", {}),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "threshold checked pre-discount"}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=8)))
+    check("the second identical read is still blocked", report.steps[1].result.ok is False)
+    check("the patch was actually rejected", report.steps[2].result.ok is False,
+          report.steps[2].result.content[:120])
+    check("a rejection unblocks the re-read it asked for",
+          report.steps[3].result.ok is True, report.steps[3].result.content[:120])
+    check("re-read content is the file, not a refusal",
+          "cart.py" in report.steps[3].result.content)
+    check("the run recovers and fixes the bug", report.outcome is Outcome.FIXED,
+          report.outcome.value)
+    check("only one call was blocked",
+          len([e for e in events if e["event"] == "repeat_blocked"]) == 1,
+          str([e["event"] for e in events].count("repeat_blocked")))
+
     varied = _run(
         [_turn("HYPOTHESIS: read one", "read_file", {"path": "cart.py", "start_line": 1}),
          _turn("HYPOTHESIS: read two", "read_file", {"path": "cart.py", "start_line": 20}),
@@ -783,6 +960,30 @@ def suite_loop() -> None:
           "Call finish now" in prompts[-1], prompts[-1][-160:])
     check("directive did not delay the fix", report.outcome is Outcome.FIXED)
 
+    # --- a directive survives a turn that did nothing ---------------------
+    # A live run went green on turn 7, returned an empty completion on turn 8,
+    # and was never told again that it was done: the directive was recomputed
+    # as None by the no-action branch. It then spent the whole budget.
+    report, events = _run([
+        _turn("HYPOTHESIS: patch", "apply_patch", {"diff": REAL_FIX}),
+        _turn("HYPOTHESIS: check", "run_tests", {}),
+        _turn("HYPOTHESIS: nothing to say"),
+        _turn("HYPOTHESIS: still nothing"),
+        _turn("HYPOTHESIS: done", "finish", {"summary": "threshold checked pre-discount"}),
+    ], cfg=Config(loop=LoopConfig(max_iterations=6)))
+    prompts = [c["messages"][-1]["content"] for c in _last_replay.calls]
+    check("finish directive is issued once the test passes",
+          "Call finish now" in prompts[2], prompts[2][-200:])
+    check("finish directive survives one dead turn",
+          "Call finish now" in prompts[3], prompts[3][-200:])
+    check("finish directive survives two dead turns",
+          "Call finish now" in prompts[4], prompts[4][-200:])
+    check("the no-action reason is added, not substituted",
+          "exactly one tool call" in prompts[3])
+    check("the run still ends fixed", report.outcome is Outcome.FIXED, report.outcome.value)
+    check("a green run stops telling the model to read files",
+          "use read_file" not in prompts[4], prompts[4][:300])
+
     # --- degenerate model behaviour --------------------------------------
     report, _ = _run([_turn("HYPOTHESIS: thinking out loud, no action") for _ in range(2)],
                      cfg=Config(loop=LoopConfig(max_iterations=2)))
@@ -801,6 +1002,154 @@ def suite_loop() -> None:
     check("refusal is not a success", report.outcome is not Outcome.FIXED)
     check("invalid task traced",
           any(e.get("detail") == "target test already passes" for e in events))
+
+
+def suite_benchmark() -> None:
+    """The benchmark itself, offline: no network, no API key, no live model."""
+    from green_agent.types import Outcome, RunReport
+
+    from benchmark.ablations import ABLATIONS, config_for
+    from benchmark.catalog import BUGS, load_tasks
+    from benchmark.prepare import checkout, verify
+    from benchmark.scoring import (
+        INVALID,
+        SOLVED,
+        UNSOLVED,
+        Result,
+        aggregate,
+        score_report,
+        touched_test_files,
+    )
+
+    tasks = load_tasks()
+
+    # --- the catalogue ----------------------------------------------------
+    check("six tasks on disk", len(tasks) == 6, str(len(tasks)))
+    check("every spec was written out", {t.task_id for t in tasks} == {b.task_id for b in BUGS})
+    check("two tasks per project",
+          sorted(Counter(t.project for t in tasks).values()) == [2, 2, 2],
+          str(Counter(t.project for t in tasks)))
+    check("bug shapes are all different",
+          len({t.shape for t in tasks}) == 6, str(sorted({t.shape for t in tasks})))
+    check("at least two tracebacks point away from the bug",
+          sum(1 for t in tasks if t.traceback == "away from the bug") >= 2)
+    check("every task names its project directory",
+          all(t.project_dir.is_dir() for t in tasks))
+    check("every task has a patch file", all(t.patch_path.is_file() for t in tasks))
+    check("every task names a test file as its target",
+          all(t.target_test.startswith("tests/") and "::" in t.target_test for t in tasks))
+
+    # A spec whose anchor text drifted still writes a patch that no longer
+    # applies, so regenerating must reproduce exactly what is committed.
+    for spec in BUGS:
+        stored = (TASKS / spec.task_id / "bug.patch").read_text(encoding="utf-8")
+        check(f"patch matches the source: {spec.task_id}", spec.diff() == stored)
+
+    # --- every bug is observable -----------------------------------------
+    # The expensive one, and the one that matters: green without the patch,
+    # exactly the named test failing with it. Without this a benchmark reports
+    # numbers about tasks that were never valid.
+    for task in tasks:
+        outcome = verify(task)
+        check(f"observable: {task.task_id}", outcome.ok, "; ".join(outcome.problems))
+
+    # --- ablations are config changes and nothing else --------------------
+    check("five ablations", sorted(ABLATIONS) ==
+          ["depth-1", "full", "no-repeat-detection", "no-slicing", "no-test-guard"])
+    base = config_for("full")
+    check("full is the shipped default", base == Config())
+    check("no-slicing only moves whole_file_context",
+          config_for("no-slicing").context.whole_file_context is True
+          and config_for("no-slicing").loop == base.loop)
+    check("depth-1 only moves callee_depth",
+          config_for("depth-1").context.callee_depth == 1
+          and config_for("depth-1").guards == base.guards)
+    check("no-test-guard only drops the guard",
+          config_for("no-test-guard").guards.forbid_test_file_edits is False
+          and config_for("no-test-guard").context == base.context)
+    check("no-repeat-detection only disables the detector",
+          config_for("no-repeat-detection").loop.repeat_detection is False
+          and config_for("no-repeat-detection").context == base.context)
+    try:
+        Config.from_env_and_overrides(**{"context.no_such_knob": 1})
+        check("a typo'd override is refused", False)
+    except KeyError:
+        check("a typo'd override is refused", True)
+
+    # --- scoring ----------------------------------------------------------
+    def _report(outcome, diff="", task="t", iterations=3, tokens=100):
+        return RunReport(task, outcome, iterations, tokens, 1.0, diff)
+
+    solved = score_report(_report(Outcome.FIXED, REAL_FIX), "full")
+    check("a verified fix scores solved", solved.score == SOLVED)
+    check("solved run records what it changed", solved.changed_files == ["cart.py"])
+
+    # The rule the no-test-guard ablation exists to keep honest: green tests
+    # reached by editing the test are not a solve, whatever the harness said.
+    cheated = score_report(_report(Outcome.FIXED, CHEAT), "no-test-guard")
+    check("a test-file edit scores INVALID, not solved", cheated.score == INVALID,
+          cheated.score)
+    check("INVALID names the file", cheated.test_files_touched == ["tests/test_cart.py"])
+    check("INVALID explains itself", "modified test file" in cheated.detail)
+    check("the harness outcome is still recorded", cheated.outcome == "fixed")
+    check("a fix plus a test edit is still INVALID",
+          score_report(_report(Outcome.FIXED, REAL_FIX + CHEAT), "full").score == INVALID)
+    check("touched_test_files ignores source files", touched_test_files(REAL_FIX) == [])
+    check("conftest counts as a test file",
+          touched_test_files("--- a/conftest.py\n+++ b/conftest.py\n") == ["conftest.py"])
+
+    check("budget exhaustion is unsolved",
+          score_report(_report(Outcome.BUDGET_EXHAUSTED), "full").score == UNSOLVED)
+    check("stagnation is unsolved",
+          score_report(_report(Outcome.STAGNATED), "full").score == UNSOLVED)
+    check("a harness error is not an unsolved task",
+          score_report(_report(Outcome.ERROR), "full").score == "error")
+
+    # --- report arithmetic ------------------------------------------------
+    synthetic = [
+        Result("a", "full", 1, SOLVED, "fixed", iterations=4, tokens=1000, wall_time_s=1.0),
+        Result("a", "full", 2, SOLVED, "fixed", iterations=6, tokens=3000, wall_time_s=1.0),
+        Result("b", "full", 1, UNSOLVED, "budget", iterations=12, tokens=6000, wall_time_s=1.0),
+        Result("c", "full", 1, INVALID, "fixed", iterations=2, tokens=2000, wall_time_s=1.0),
+    ]
+    totals = aggregate(synthetic)
+    check("solve rate counts only solved", totals.solved == 2 and totals.runs == 4)
+    check("solve rate is a fraction of runs", abs(totals.solve_rate - 0.5) < 1e-9)
+    check("invalid is counted separately", totals.invalid == 1 and totals.unsolved == 1)
+    check("mean iterations over all runs", totals.iterations == 6.0, str(totals.iterations))
+    check("mean tokens over all runs", totals.tokens == 3000.0, str(totals.tokens))
+    check("tokens per solve divides by solves, not runs",
+          totals.tokens_per_solved == 6000.0, str(totals.tokens_per_solved))
+    check("an all-invalid file solves nothing",
+          aggregate([synthetic[3]]).solved == 0)
+    check("nothing solved does not divide by zero",
+          aggregate([synthetic[2]]).tokens_per_solved == float("inf"))
+    check("an empty result set is empty, not an error", aggregate([]).runs == 0)
+
+    # --- one offline agent run over a real task ---------------------------
+    # ReplayLLM, so the whole path -- checkout, bug applied at HEAD, agent loop,
+    # independent verification -- runs in the gate with no key and no network.
+    task = next(t for t in tasks if t.task_id == "datalib-top-n-default")
+    with tempfile.TemporaryDirectory() as trace_dir, checkout(task) as repo:
+        # Diffed against the checkout, not the green project: the fix has to go
+        # 1 -> 3, and generating it here asserts the bug is actually present.
+        fix = _diff_in(repo, "aggregate.py",
+                       lambda t: t.replace("DEFAULT_TOP_N = 1", "DEFAULT_TOP_N = 3"))
+        script = [
+            _turn("HYPOTHESIS: the default constant is wrong", "apply_patch", {"diff": fix}),
+            _turn("HYPOTHESIS: verify", "run_tests", {}),
+            _turn("HYPOTHESIS: done", "finish", {"summary": "DEFAULT_TOP_N was 1"}),
+        ] + [_turn("HYPOTHESIS: spare", "run_tests", {}) for _ in range(6)]
+        report = Agent(Config(trace_dir=trace_dir), ReplayLLM(script)).run(
+            repo, task.target_test, task.task_id)
+
+    check("offline benchmark run reaches FIXED", report.outcome is Outcome.FIXED,
+          report.outcome.value)
+    check("offline run took the scripted three turns", report.iterations == 3,
+          str(report.iterations))
+    check("offline run scores solved", score_report(report, "full").score == SOLVED)
+    check("offline run touched no test file", touched_test_files(report.final_diff) == [])
+    check("offline run recorded its trace", Path(report.trace_path).name.endswith(".jsonl"))
 
 
 # ---------------------------------------------------------------------------
@@ -838,7 +1187,7 @@ SUITES = {
     "budget": suite_budget,
     "tools": suite_tools,
     "loop": suite_loop,
-    # "benchmark": suite_benchmark,   # next
+    "benchmark": suite_benchmark,
 }
 
 
