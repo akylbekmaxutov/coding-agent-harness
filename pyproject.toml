@@ -1,0 +1,13 @@
+[project]
+name = "green-agent"
+version = "0.1.0"
+description = "A failing-test-fixing agent harness with a verifier in the loop."
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27", "pytest>=8.0"]
+
+[project.scripts]
+green-agent = "green_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
