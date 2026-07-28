@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from ..context.traceback_parse import parse_failures
 from ..types import TestResult
 
 # 0 all passed, 1 tests failed, 2 interrupted (usually a collection error),
@@ -15,7 +16,7 @@ _COLLECT_FAILURE_CODES = {2, 3, 4, 5}
 
 
 def run(cwd: str | Path, node_id: str | None = None, timeout_s: int = 60) -> TestResult:
-    cmd = [sys.executable, "-m", "pytest", "--tb=long", "-q", "--color=no", "-p", "no:cacheprovider"]
+    cmd = [sys.executable, "-m", "pytest", "--tb=short", "-q", "--color=no", "-p", "no:cacheprovider"]
     if node_id:
         cmd.append(node_id)
 
@@ -51,11 +52,12 @@ def run(cwd: str | Path, node_id: str | None = None, timeout_s: int = 60) -> Tes
     duration = time.monotonic() - started
     rc = proc.returncode
 
+    output = output or ""
     return TestResult(
         passed=(rc == 0 and not timed_out),
-        failures=(),  # populated by context.traceback_parse in the next step
+        failures=() if rc == 0 else parse_failures(output, cwd),
         duration_s=round(duration, 3),
-        raw_output=output or "",
+        raw_output=output,
         timed_out=timed_out,
         collect_error=(rc in _COLLECT_FAILURE_CODES and not timed_out),
     )

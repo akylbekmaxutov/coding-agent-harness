@@ -26,6 +26,7 @@ import httpx
 
 from green_agent.config import GuardConfig, ModelConfig, load_dotenv, resolve_api_key
 from green_agent.llm import LLMTransportError, OpenAICompatibleLLM, ReplayLLM
+from green_agent.context.traceback_parse import parse_failures
 from green_agent.runtime import pytest_runner
 from green_agent.runtime.workspace import PathEscape, Workspace
 
@@ -309,6 +310,91 @@ def suite_pytest_runner() -> None:
         check("timeout noted in output", "timeout" in hung.raw_output)
 
 
+def suite_traceback_parse() -> None:
+    with Workspace(DEMO) as ws:
+        node = "tests/test_cart.py::test_discount_can_lose_free_shipping"
+        result = pytest_runner.run(ws.root, node, timeout_s=60)
+
+        check("one failure parsed", len(result.failures) == 1, str(len(result.failures)))
+        f = result.failures[0]
+        check("node id recovered", f.test_id == node, f.test_id)
+        check("assertion classified", f.exc_type == "AssertionError", f.exc_type)
+        check("message captured", "56.16" in f.message and "61.16" in f.message, f.message)
+        check("frame located in repo", f.frames[-1].in_repo is True)
+        check("frame function named", f.frames[-1].function.startswith("test_discount"))
+        check("frame path is repo-relative", f.frames[-1].path == "tests/test_cart.py")
+
+        second = pytest_runner.run(ws.root, node, timeout_s=60)
+        check("fingerprint stable across runs",
+              second.failures[0].fingerprint() == f.fingerprint())
+
+        source = ws.resolve("cart.py")
+        source.write_text("\n" * 5 + source.read_text())
+        shifted = pytest_runner.run(ws.root, node, timeout_s=60)
+        check("fingerprint survives line shifts",
+              shifted.failures[0].fingerprint() == f.fingerprint())
+
+        whole = pytest_runner.run(ws.root, timeout_s=60)
+        check("passing tests produce no failure records", len(whole.failures) == 1)
+
+    # Synthetic reports: shapes the demo repo cannot produce on demand.
+    deep = parse_failures(
+        "=================================== FAILURES ===================================\n"
+        "_________________________________ test_raises __________________________________\n"
+        "tests/test_a.py:10: in test_raises\n"
+        "    assert outer(0) == 1\n"
+        "/usr/lib/python3.12/site-packages/thing.py:40: in helper\n"
+        "    return inner(x)\n"
+        "lib.py:2: in inner\n"
+        "    return 10 / x\n"
+        "E   ZeroDivisionError: division by zero\n"
+        "=========================== short test summary info ============================\n"
+        "FAILED tests/test_a.py::test_raises - ZeroDivisionError: division by zero\n",
+        DEMO,
+    )
+    check("multi-frame traceback parsed", len(deep) == 1 and len(deep[0].frames) == 3)
+    check("raised exception typed", deep[0].exc_type == "ZeroDivisionError")
+    check("site-packages frame marked external", deep[0].frames[1].in_repo is False)
+    check("missing repo file marked external", deep[0].frames[2].in_repo is False)
+
+    classes = parse_failures(
+        "=================================== FAILURES ===================================\n"
+        "____________________________ TestThing.test_method _____________________________\n"
+        "tests/test_b.py:5: in test_method\n"
+        "E   assert 1 == 2\n"
+        "________________________________ test_param[2] _________________________________\n"
+        "tests/test_b.py:9: in test_param\n"
+        "E   assert 2 == 1\n"
+        "=========================== short test summary info ============================\n"
+        "FAILED tests/test_b.py::TestThing::test_method - assert 1 == 2\n"
+        "FAILED tests/test_b.py::test_param[2] - assert 2 == 1\n",
+        DEMO,
+    )
+    check("two failures separated", len(classes) == 2)
+    check("class method node id rebuilt",
+          classes[0].test_id == "tests/test_b.py::TestThing::test_method", classes[0].test_id)
+    check("parametrised node id kept",
+          classes[1].test_id == "tests/test_b.py::test_param[2]", classes[1].test_id)
+    check("distinct tests have distinct fingerprints",
+          classes[0].fingerprint() != classes[1].fingerprint())
+
+    fixture = parse_failures(
+        "==================================== ERRORS ====================================\n"
+        "_____________________ ERROR at setup of test_uses_fixture ______________________\n"
+        "tests/test_c.py:5: in broken_fixture\n"
+        "    raise RuntimeError(\"setup exploded\")\n"
+        "E   RuntimeError: setup exploded\n"
+        "=========================== short test summary info ============================\n"
+        "ERROR tests/test_c.py::test_uses_fixture - RuntimeError: setup exploded\n",
+        DEMO,
+    )
+    check("fixture error captured", len(fixture) == 1 and fixture[0].exc_type == "RuntimeError")
+    check("fixture error keeps the test node id",
+          fixture[0].test_id == "tests/test_c.py::test_uses_fixture", fixture[0].test_id)
+
+    check("empty report yields nothing", parse_failures("4 passed in 0.02s", DEMO) == ())
+
+
 # ---------------------------------------------------------------------------
 # live
 # ---------------------------------------------------------------------------
@@ -339,8 +425,8 @@ SUITES = {
     "replay": suite_replay,
     "workspace": suite_workspace,
     "pytest_runner": suite_pytest_runner,
-    # "traceback_parse": suite_traceback_parse,   # next
-    # "slicer": suite_slicer,
+    "traceback_parse": suite_traceback_parse,
+    # "slicer": suite_slicer,      # next
 }
 
 
