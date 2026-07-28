@@ -24,8 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 
-from green_agent.config import ModelConfig, load_dotenv, resolve_api_key
+from green_agent.config import GuardConfig, ModelConfig, load_dotenv, resolve_api_key
 from green_agent.llm import LLMTransportError, OpenAICompatibleLLM, ReplayLLM
+from green_agent.runtime import pytest_runner
+from green_agent.runtime.workspace import PathEscape, Workspace
+
+DEMO = Path(__file__).resolve().parents[1] / "demo_repo"
 
 _results: list[tuple[str, bool]] = []
 _GREEN, _RED, _DIM, _OFF = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
@@ -236,6 +240,75 @@ def suite_replay() -> None:
         check("exhausted replay fails loudly", True)
 
 
+def suite_workspace() -> None:
+    with Workspace(DEMO, test_globs=GuardConfig().test_path_globs) as ws:
+        check("workspace materialised", (ws.root / "cart.py").is_file())
+        check("source repo untouched by setup", (DEMO / "cart.py").is_file())
+        check("baseline commit recorded", bool(ws.baseline))
+
+        check("test file recognised", ws.is_test_file("tests/test_cart.py"))
+        check("conftest recognised", ws.is_test_file("conftest.py"))
+        check("source file not a test file", not ws.is_test_file("cart.py"))
+
+        check("relative path resolves inside", ws.resolve("cart.py").is_file())
+        for attack in ("../../etc/passwd", "/etc/passwd", "tests/../../outside.py"):
+            try:
+                ws.resolve(attack)
+                check(f"path escape refused: {attack}", False)
+            except PathEscape:
+                check(f"path escape refused: {attack}", True)
+
+        target = ws.resolve("cart.py")
+        original = target.read_text()
+        mark = ws.checkpoint("before-edit")
+
+        target.write_text(original.replace("TAX_RATE = 0.20", "TAX_RATE = 0.99"))
+        check("edit visible in diff", "TAX_RATE = 0.99" in ws.diff())
+        check("changed file listed", ws.changed_files() == ["cart.py"], ws.changed_files())
+        check("original still untouched on disk",
+              "TAX_RATE = 0.20" in (DEMO / "cart.py").read_text())
+
+        (ws.root / "junk.py").write_text("# stray file\n")
+        check("untracked file appears in diff", "junk.py" in ws.diff())
+
+        ws.restore(mark)
+        check("restore reverts the edit", target.read_text() == original)
+        check("restore removes untracked files", not (ws.root / "junk.py").exists())
+        check("restore leaves a clean diff", ws.diff().strip() == "")
+
+        root = ws.root
+    check("teardown removes the workspace", not root.exists())
+
+
+def suite_pytest_runner() -> None:
+    with Workspace(DEMO) as ws:
+        whole = pytest_runner.run(ws.root, timeout_s=60)
+        check("suite reports failure", whole.passed is False)
+        check("not misreported as a collection error", whole.collect_error is False)
+        check("output captured", "test_discount_can_lose_free_shipping" in whole.raw_output)
+        check("duration measured", whole.duration_s > 0)
+
+        node = "tests/test_cart.py::test_discount_can_lose_free_shipping"
+        one = pytest_runner.run(ws.root, node, timeout_s=60)
+        check("target test fails on its own", one.passed is False)
+        check("single test is faster than the suite", one.duration_s <= whole.duration_s + 0.5)
+
+        green = pytest_runner.run(ws.root, "tests/test_cart.py::test_subtotal", timeout_s=60)
+        check("passing test reports passed", green.passed is True)
+        check("passing test has no failures", green.failures == ())
+
+        ws.resolve("cart.py").write_text("def broken(:\n")
+        broken = pytest_runner.run(ws.root, node, timeout_s=60)
+        check("syntax error flagged as collection error", broken.collect_error is True)
+        check("collection error is not a pass", broken.passed is False)
+
+        ws.resolve("cart.py").write_text("while True:\n    pass\n")
+        hung = pytest_runner.run(ws.root, node, timeout_s=3)
+        check("infinite loop is killed", hung.timed_out is True)
+        check("timeout is not a pass", hung.passed is False)
+        check("timeout noted in output", "timeout" in hung.raw_output)
+
+
 # ---------------------------------------------------------------------------
 # live
 # ---------------------------------------------------------------------------
@@ -264,8 +337,9 @@ SUITES = {
     "config": suite_config,
     "llm": suite_llm,
     "replay": suite_replay,
-    # "workspace": suite_workspace,      # next
-    # "pytest_runner": suite_pytest_runner,
+    "workspace": suite_workspace,
+    "pytest_runner": suite_pytest_runner,
+    # "traceback_parse": suite_traceback_parse,   # next
     # "slicer": suite_slicer,
 }
 
