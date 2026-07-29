@@ -15,23 +15,21 @@ Everything here except the model is the submission: how the problem was framed,
 what the harness does with a model that is confidently wrong, and what happened
 when it was measured.
 
-> **New here?** [`EXPLAINER.md`](EXPLAINER.md) is the full walkthrough — the
-> problem, the architecture, how it was built, what the benchmark found, and an
-> honest list of what is weak about it. This README is the reference; that one is
-> the explanation.
-
 ---
 
 ## Quick start
 
 ```bash
 git clone <this repo> && cd coding-agent-harness
-python3 -m venv .venv && .venv/bin/pip install httpx pytest   # Python >= 3.11
 
-.venv/bin/python scripts/initial_test.py        # 291 offline checks, ~21s, no key needed
-echo 'OPENAI_KEY=sk-...' > .env                 # only needed for live runs
+uv venv                                 # Python >= 3.11
+source .venv/bin/activate
+uv pip install httpx pytest
 
-.venv/bin/python -m green_agent.cli fix --repo demo_repo \
+python scripts/initial_test.py          # 291 offline checks, ~21s, no key needed
+echo 'OPENAI_KEY=sk-...' > .env         # only needed for live runs
+
+python -m green_agent.cli fix --repo demo_repo \
   --test "tests/test_cart.py::test_discount_can_lose_free_shipping" --show-diff
 ```
 
@@ -281,18 +279,21 @@ scripts/
 ### Install
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install httpx pytest
+uv venv
+source .venv/bin/activate
+uv pip install httpx pytest
 ```
 
 Python 3.11 or newer. The only runtime dependencies are `httpx` (the provider
-client) and `pytest` (the verifier). `pip install -e .` also works and gives you
-a `green-agent` console script; the examples below use `python -m green_agent.cli`
-so that nothing has to be installed.
+client) and `pytest` (the verifier). Every command below assumes that environment
+is activated — activate it once per shell and just call `python`. (The venv cannot
+be named `green_agent`: that directory is the package itself.)
+`uv pip install -e .` also works and gives you a `green-agent` console script; the
+examples below use `python -m green_agent.cli` so that nothing has to be installed.
 
 **Run every command from the repository root.** Without an install, the
 `green_agent` package is imported from the working directory, so anywhere else
-gives you `No module named 'green_agent'`. With `pip install -e .` that goes
+gives you `No module named 'green_agent'`. With `uv pip install -e .` that goes
 away, but `load_dotenv()` still reads `./.env`, so a live run from elsewhere
 fails with a missing-API-key error even though the file exists — export the key
 instead if you need to run from another directory. (`scripts/initial_test.py`
@@ -314,13 +315,13 @@ runs the entire suite, benchmark included, with no network access at all.
 Check the key works:
 
 ```bash
-.venv/bin/python scripts/initial_test.py --live    # one real model call
+python scripts/initial_test.py --live    # one real model call
 ```
 
 ### Fixing a failing test
 
 ```bash
-.venv/bin/python -m green_agent.cli fix \
+python -m green_agent.cli fix \
   --repo demo_repo \
   --test "tests/test_cart.py::test_discount_can_lose_free_shipping" \
   --show-diff
@@ -356,7 +357,7 @@ claim that gets checked, not an ending.
 ### Running against your own repository
 
 ```bash
-.venv/bin/python -m green_agent.cli fix \
+python -m green_agent.cli fix \
   --repo /path/to/your/project \
   --test "tests/test_orders.py::test_totals_include_tax" \
   --show-diff
@@ -388,11 +389,11 @@ plain directory with no `.git` is copied instead, which is why `demo_repo`
 behaves the way you would expect.
 
 **Dependencies must be importable by the interpreter you launch.** The runner
-uses `sys.executable`, so pytest runs inside *this* virtualenv, not your
-project's. Install the target's dependencies here first:
+uses `sys.executable`, so pytest runs inside the activated environment, not your
+project's. Install the target's dependencies there first:
 
 ```bash
-.venv/bin/pip install -e /path/to/your/project      # or -r its requirements.txt
+uv pip install -e /path/to/your/project      # or -r its requirements.txt
 ```
 
 **Your tests must match the guard's globs.** Files matching `tests/**`,
@@ -432,7 +433,7 @@ Every run writes one JSONL file to `.green_agent/traces/`. It holds the full
 model response for each turn, so it is both the audit log and a replay fixture.
 
 ```bash
-.venv/bin/python -c "
+python -c "
 import json, sys
 for line in open(sys.argv[1]):
     o = json.loads(line); e = o.pop('event')
@@ -451,16 +452,16 @@ Replay a recorded run with no API calls, to test a harness change against the
 exact model output that exposed a bug:
 
 ```bash
-.venv/bin/python -m green_agent.cli replay \
+python -m green_agent.cli replay \
   --trace .green_agent/traces/<file>.jsonl --repo demo_repo --test <node_id>
 ```
 
 ### The gate
 
 ```bash
-.venv/bin/python scripts/initial_test.py             # everything; exit 0 required
-.venv/bin/python scripts/initial_test.py --list      # suite names
-.venv/bin/python scripts/initial_test.py --only slicer
+python scripts/initial_test.py             # everything; exit 0 required
+python scripts/initial_test.py --list      # suite names
+python scripts/initial_test.py --only slicer
 ```
 
 291 checks in about 21 seconds, no network and no API key. Adding a module means
@@ -474,7 +475,7 @@ runner red.
 | `No module named 'green_agent'` | not running from the repository root |
 | `No API key found` even with a `.env` | same — `load_dotenv()` reads `./.env` |
 | exit 2, "target test already passes" | the bug is uncommitted; the worktree is built from HEAD |
-| `ModuleNotFoundError` inside the agent's test runs | target repo's dependencies not installed in `.venv` |
+| `ModuleNotFoundError` inside the agent's test runs | target repo's dependencies not installed in the activated environment |
 | every `finish` rejected, run hits budget | another test in the suite is already failing — use `--no-suite-check` |
 | test run reported as timed out | suite slower than `pytest_timeout_s` (60s) in `config.py` |
 | agent patches the test and "succeeds" | your tests do not match `test_path_globs` |
@@ -489,7 +490,7 @@ not the scoreboard: it is an instrument for finding defects in the harness.
 ### Always verify the tasks first
 
 ```bash
-.venv/bin/python benchmark/run.py --verify-tasks
+python benchmark/run.py --verify-tasks
 ```
 
 This asserts, for every task, that the project is green *without* the bug patch
@@ -500,7 +501,7 @@ tasks were never valid produces numbers about nothing. It needs no API key.
 ### Run a sweep
 
 ```bash
-.venv/bin/python benchmark/run.py --ablation full --repeat 3
+python benchmark/run.py --ablation full --repeat 3
 ```
 
 Live progress is one line per attempt; results land in
@@ -529,15 +530,15 @@ reproduce the whole results table:
 
 ```bash
 for a in full no-slicing depth-1 no-repeat-detection no-test-guard; do
-  .venv/bin/python benchmark/run.py --ablation "$a" --repeat 3
+  python benchmark/run.py --ablation "$a" --repeat 3
 done
 ```
 
 ### Read the results
 
 ```bash
-.venv/bin/python benchmark/report.py benchmark/results/full.json
-.venv/bin/python benchmark/report.py benchmark/results/full.json \
+python benchmark/report.py benchmark/results/full.json
+python benchmark/report.py benchmark/results/full.json \
                                      benchmark/results/no-slicing.json
 ```
 
@@ -555,15 +556,15 @@ would be grading itself.
 
 1. Put a green, dependency-light project under `benchmark/projects/<name>/`, with
    a root `conftest.py` so `tests/` can import the flat modules. Confirm it is
-   green: `cd benchmark/projects/<name> && ../../../.venv/bin/python -m pytest -q`.
+   green: `cd benchmark/projects/<name> && python -m pytest -q`.
 2. Add a `BugSpec` to `BUGS` in [`benchmark/catalog.py`](benchmark/catalog.py) —
    a task id, the file, the target test, the bug shape, and the `old` → `new`
    text substitution.
 3. Regenerate and verify:
 
 ```bash
-.venv/bin/python benchmark/make_tasks.py
-.venv/bin/python benchmark/run.py --verify-tasks
+python benchmark/make_tasks.py
+python benchmark/run.py --verify-tasks
 ```
 
 Patches are diffed from the file on disk, never hand-written, so a patch cannot
@@ -586,7 +587,7 @@ report arithmetic and the INVALID rule on synthetic results. The gate therefore
 covers the benchmark, not just the agent.
 
 ```bash
-.venv/bin/python scripts/initial_test.py --only benchmark
+python scripts/initial_test.py --only benchmark
 ```
 
 ---
